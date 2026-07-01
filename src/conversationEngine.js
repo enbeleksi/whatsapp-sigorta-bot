@@ -1,5 +1,6 @@
 const { getSession, resetSession } = require("./sessionStore");
-const { sendText, sendButtons, sendList } = require("./whatsapp");
+const { sendText, sendButtons, sendList } = require("./loggedWhatsapp");
+const messageLog = require("./messageLog");
 const flows = require("./flows");
 
 const PRODUCT_KEYS = Object.keys(flows); // ["kasko", "trafik", "saglik", "dask", "konut", "seyahat"]
@@ -13,6 +14,28 @@ async function handleIncoming(from, message) {
 
   const userText =
     message.type === "interactive" ? message.interactiveTitle : (message.text || "").trim();
+
+  // Gelen mesaji panelde gorunmesi icin kaydet
+  messageLog.logMessage(from, "in", userText);
+  if (session.name) {
+    messageLog.setName(from, session.name);
+  }
+
+  // Bot duraklatilmissa (temsilci devraldiysa) hicbir otomatik islem yapma,
+  // sadece mesaji panelde gorunecek sekilde kaydet ve cik.
+  if (session.paused) {
+    return;
+  }
+
+  // Musteri istedigi an "temsilci" yazarak bir insanla gorusmek isteyebilir
+  if (/temsilci|insan|musteri.?temsil/i.test(userText)) {
+    session.paused = true;
+    await sendText(
+      from,
+      "Sizi bir temsilcimize yonlendiriyorum, en kisa surede size yazacaklar. Bu sirada baska bir sey yazmaniza gerek yok."
+    );
+    return;
+  }
 
   // Kullanici her an "iptal" veya "basla" yazarak sifirlayabilsin
   if (/^iptal$/i.test(userText)) {
@@ -124,6 +147,7 @@ async function askCurrentQuestion(from, session) {
 async function finishFlow(from, session) {
   const flow = flows[session.product];
   session.state = "DONE";
+  messageLog.setName(from, session.name);
 
   const summaryLines = flow.questions.map(
     (q) => `- ${q.text.replace(/\?$/, "")}: ${session.answers[q.id]}`
