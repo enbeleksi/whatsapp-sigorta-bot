@@ -12,6 +12,7 @@ function getSession(phone) {
       product: null,
       questionIndex: 0,
       answers: {},
+      paused: false, // true olunca bot devreye girmez, sadece temsilci yazar
       updatedAt: Date.now()
     });
   }
