@@ -9,6 +9,8 @@
 // question.validate: (metin) => true/false. Sadece "text" tipi sorularda kullanilir.
 //   Belirtilirse ve false donerse, bot ayni soruyu question.validationError mesajiyla
 //   birlikte tekrar sorar (bir sonraki soruya gecmez).
+// question.sameAsAccountHolder: true ise ve musterinin ismi zaten biliniyorsa
+//   (WhatsApp konusmasinin basinda alinmis), bu soru tekrar sorulmaz, otomatik doldurulur.
 //
 // product.agentNumber: bu urunle ilgilenen calisanin WhatsApp numarasi (basinda ulke
 //   kodu, orn: 905321234567). Doldurulmazsa (yani "905XXXXXXXXX" placeholder olarak
@@ -23,6 +25,33 @@ const {
   plakaGecerliMi
 } = require("./validators");
 
+const MESLEK_SORU = {
+  id: "meslek",
+  text: "Son olarak mesleğinizi öğrenebilir miyim? Bazı mesleklerde indirim uygulanabildiği için bu bilgiyi soruyoruz.",
+  type: "text"
+};
+
+const MESLEK_SORU_UCUNCU_SAHIS = {
+  id: "meslek",
+  text: "Son olarak sigortalanacak kişinin mesleğini öğrenebilir miyiz? Bazı mesleklerde indirim uygulanabildiği için bu bilgiyi soruyoruz.",
+  type: "text"
+};
+
+const TC_KIMLIK_SORU = {
+  id: "tc_kimlik",
+  text: "T.C. kimlik numaranızı yazar mısınız?",
+  type: "text",
+  validate: tcKimlikGecerliMi,
+  validationError:
+    "Girdiğiniz T.C. kimlik numarası geçerli görünmüyor. 11 haneli olarak tekrar yazar mısınız?"
+};
+
+const SEHIR_SORU = {
+  id: "sehir",
+  text: "Hangi şehirden bize ulaşıyorsunuz?",
+  type: "text"
+};
+
 module.exports = {
   dask: {
     label: "DASK",
@@ -33,39 +62,12 @@ module.exports = {
     qrGreeting:
       "Merhaba! 😊 Yeni eviniz hayırlı olsun, içinde huzur dolu günler geçirmenizi dileriz! 🏠💛 DASK poliçenizi hemen hazırlayabilmemiz için birkaç bilgi alalım, olur mu?",
     questions: [
-      { id: "ad_soyad", text: "Ad soyadınızı yazar mısınız?", type: "text" },
-      {
-        id: "dogum_tarihi",
-        text: "Doğum tarihiniz nedir? (GG.AA.YYYY)",
-        type: "text",
-        validate: tarihGecerliMi,
-        validationError: "Tarihi GG.AA.YYYY formatında yazar mısınız? (Örn: 15.05.1990)"
-      },
-      {
-        id: "cinsiyet",
-        text: "Cinsiyetiniz nedir?",
-        type: "choice",
-        options: ["Kadın", "Erkek"]
-      },
-      { id: "meslek", text: "Mesleğiniz nedir?", type: "text" },
-      { id: "il", text: "İkamet ettiğiniz il neresidir?", type: "text" },
-      { id: "ilce", text: "İkamet ettiğiniz ilçe neresidir?", type: "text" },
+      { id: "ad_soyad", text: "İsim ve soyisminizi yazar mısınız?", type: "text", sameAsAccountHolder: true },
       {
         id: "mulkiyet_durumu",
         text: "Sigortalanacak konut size mi ait, yoksa kiracı mısınız?",
         type: "choice",
         options: ["Ev Sahibiyim", "Kiracıyım"]
-      },
-      {
-        id: "tc_kimlik",
-        text: (answers) =>
-          answers.mulkiyet_durumu === "Kiracıyım"
-            ? "Ev sahibinin T.C. kimlik numarasını yazar mısınız? (Poliçeyi bu bilgiyle hazırlayacağız)"
-            : "T.C. kimlik numaranızı yazar mısınız? (Poliçeyi bu bilgiyle hazırlayacağız)",
-        type: "text",
-        validate: tcKimlikGecerliMi,
-        validationError:
-          "Girdiğiniz T.C. kimlik numarası geçerli görünmüyor. 11 haneli olarak tekrar yazar mısınız?"
       },
       {
         id: "daini_murtehin",
@@ -95,7 +97,19 @@ module.exports = {
         validate: pozitifSayiMi,
         validationError: "Kat sayısını sadece rakamla yazar mısınız? (Örn: 5)"
       },
-      { id: "dairenin_bulundugu_kat", text: "Dairenin bulunduğu kat kaçıncı kattır?", type: "text" }
+      { id: "dairenin_bulundugu_kat", text: "Dairenin bulunduğu kat kaçıncı kattır?", type: "text" },
+      { ...MESLEK_SORU },
+      {
+        id: "tc_kimlik",
+        text: (answers) =>
+          answers.mulkiyet_durumu === "Kiracıyım"
+            ? "Son olarak ev sahibinin T.C. kimlik numarasını yazar mısınız? (Poliçeyi bu bilgiyle hazırlayacağız)"
+            : "Son olarak T.C. kimlik numaranızı yazar mısınız? (Poliçeyi bu bilgiyle hazırlayacağız)",
+        type: "text",
+        validate: tcKimlikGecerliMi,
+        validationError:
+          "Girdiğiniz T.C. kimlik numarası geçerli görünmüyor. 11 haneli olarak tekrar yazar mısınız?"
+      }
     ]
   },
 
@@ -103,39 +117,12 @@ module.exports = {
     label: "Konut Sigortası",
     agentNumber: "905380711711", // Bahadır - elementer branş (Konut)
     questions: [
-      { id: "ad_soyad", text: "Ad soyadınızı yazar mısınız?", type: "text" },
-      {
-        id: "dogum_tarihi",
-        text: "Doğum tarihiniz nedir? (GG.AA.YYYY)",
-        type: "text",
-        validate: tarihGecerliMi,
-        validationError: "Tarihi GG.AA.YYYY formatında yazar mısınız? (Örn: 15.05.1990)"
-      },
-      {
-        id: "cinsiyet",
-        text: "Cinsiyetiniz nedir?",
-        type: "choice",
-        options: ["Kadın", "Erkek"]
-      },
-      { id: "meslek", text: "Mesleğiniz nedir?", type: "text" },
-      { id: "il", text: "İkamet ettiğiniz il neresidir?", type: "text" },
-      { id: "ilce", text: "İkamet ettiğiniz ilçe neresidir?", type: "text" },
+      { id: "ad_soyad", text: "İsim ve soyisminizi yazar mısınız?", type: "text", sameAsAccountHolder: true },
       {
         id: "mulkiyet_durumu",
         text: "Sigortalanacak konut size mi ait, yoksa kiracı mısınız?",
         type: "choice",
         options: ["Ev Sahibiyim", "Kiracıyım"]
-      },
-      {
-        id: "tc_kimlik",
-        text: (answers) =>
-          answers.mulkiyet_durumu === "Kiracıyım"
-            ? "Ev sahibinin T.C. kimlik numarasını yazar mısınız? (Poliçeyi bu bilgiyle hazırlayacağız)"
-            : "T.C. kimlik numaranızı yazar mısınız? (Poliçeyi bu bilgiyle hazırlayacağız)",
-        type: "text",
-        validate: tcKimlikGecerliMi,
-        validationError:
-          "Girdiğiniz T.C. kimlik numarası geçerli görünmüyor. 11 haneli olarak tekrar yazar mısınız?"
       },
       {
         id: "daini_murtehin",
@@ -165,7 +152,19 @@ module.exports = {
         validate: pozitifSayiMi,
         validationError: "Kat sayısını sadece rakamla yazar mısınız? (Örn: 5)"
       },
-      { id: "dairenin_bulundugu_kat", text: "Dairenin bulunduğu kat kaçıncı kattır?", type: "text" }
+      { id: "dairenin_bulundugu_kat", text: "Dairenin bulunduğu kat kaçıncı kattır?", type: "text" },
+      { ...MESLEK_SORU },
+      {
+        id: "tc_kimlik",
+        text: (answers) =>
+          answers.mulkiyet_durumu === "Kiracıyım"
+            ? "Son olarak ev sahibinin T.C. kimlik numarasını yazar mısınız? (Poliçeyi bu bilgiyle hazırlayacağız)"
+            : "Son olarak T.C. kimlik numaranızı yazar mısınız? (Poliçeyi bu bilgiyle hazırlayacağız)",
+        type: "text",
+        validate: tcKimlikGecerliMi,
+        validationError:
+          "Girdiğiniz T.C. kimlik numarası geçerli görünmüyor. 11 haneli olarak tekrar yazar mısınız?"
+      }
     ]
   },
 
@@ -176,31 +175,7 @@ module.exports = {
     qrGreeting:
       "Merhaba! 😊 Yeni aracınız hayırlı olsun, güle güle kullanın! 🚗✨ Trafik sigortanızı en kısa sürede hazırlayabilmemiz için birkaç küçük bilgiye ihtiyacımız olacak, hemen başlayalım mı?",
     questions: [
-      { id: "ad_soyad", text: "Ad soyadınızı yazar mısınız?", type: "text" },
-      {
-        id: "tc_kimlik",
-        text: "T.C. kimlik numaranızı yazar mısınız?",
-        type: "text",
-        validate: tcKimlikGecerliMi,
-        validationError:
-          "Girdiğiniz T.C. kimlik numarası geçerli görünmüyor. 11 haneli olarak tekrar yazar mısınız?"
-      },
-      {
-        id: "dogum_tarihi",
-        text: "Doğum tarihiniz nedir? (GG.AA.YYYY)",
-        type: "text",
-        validate: tarihGecerliMi,
-        validationError: "Tarihi GG.AA.YYYY formatında yazar mısınız? (Örn: 15.05.1990)"
-      },
-      {
-        id: "cinsiyet",
-        text: "Cinsiyetiniz nedir?",
-        type: "choice",
-        options: ["Kadın", "Erkek"]
-      },
-      { id: "meslek", text: "Mesleğiniz nedir?", type: "text" },
-      { id: "il", text: "İkamet ettiğiniz il neresidir?", type: "text" },
-      { id: "ilce", text: "İkamet ettiğiniz ilçe neresidir?", type: "text" },
+      { id: "ad_soyad", text: "İsim ve soyisminizi yazar mısınız?", type: "text", sameAsAccountHolder: true },
       {
         id: "plaka",
         text: "Aracınızın plakası nedir? (Örn: 34 ABC 123)",
@@ -208,7 +183,10 @@ module.exports = {
         validate: plakaGecerliMi,
         validationError: "Plakayı doğru formatta yazar mısınız? (Örn: 34 ABC 123)"
       },
-      { id: "ruhsat_seri_no", text: "Ruhsat belge seri numarası nedir?", type: "text" }
+      { id: "ruhsat_seri_no", text: "Ruhsat belge seri numarası nedir?", type: "text" },
+      { ...SEHIR_SORU },
+      { ...MESLEK_SORU },
+      { ...TC_KIMLIK_SORU }
     ]
   },
 
@@ -216,31 +194,7 @@ module.exports = {
     label: "Kasko Sigortası",
     agentNumber: "905380711711", // Bahadır - elementer branş (Kasko)
     questions: [
-      { id: "ad_soyad", text: "Ad soyadınızı yazar mısınız?", type: "text" },
-      {
-        id: "tc_kimlik",
-        text: "T.C. kimlik numaranızı yazar mısınız?",
-        type: "text",
-        validate: tcKimlikGecerliMi,
-        validationError:
-          "Girdiğiniz T.C. kimlik numarası geçerli görünmüyor. 11 haneli olarak tekrar yazar mısınız?"
-      },
-      {
-        id: "dogum_tarihi",
-        text: "Doğum tarihiniz nedir? (GG.AA.YYYY)",
-        type: "text",
-        validate: tarihGecerliMi,
-        validationError: "Tarihi GG.AA.YYYY formatında yazar mısınız? (Örn: 15.05.1990)"
-      },
-      {
-        id: "cinsiyet",
-        text: "Cinsiyetiniz nedir?",
-        type: "choice",
-        options: ["Kadın", "Erkek"]
-      },
-      { id: "meslek", text: "Mesleğiniz nedir?", type: "text" },
-      { id: "il", text: "İkamet ettiğiniz il neresidir?", type: "text" },
-      { id: "ilce", text: "İkamet ettiğiniz ilçe neresidir?", type: "text" },
+      { id: "ad_soyad", text: "İsim ve soyisminizi yazar mısınız?", type: "text", sameAsAccountHolder: true },
       {
         id: "plaka",
         text: "Aracınızın plakası nedir? (Örn: 34 ABC 123)",
@@ -248,7 +202,10 @@ module.exports = {
         validate: plakaGecerliMi,
         validationError: "Plakayı doğru formatta yazar mısınız? (Örn: 34 ABC 123)"
       },
-      { id: "ruhsat_seri_no", text: "Ruhsat belge seri numarası nedir?", type: "text" }
+      { id: "ruhsat_seri_no", text: "Ruhsat belge seri numarası nedir?", type: "text" },
+      { ...SEHIR_SORU },
+      { ...MESLEK_SORU },
+      { ...TC_KIMLIK_SORU }
     ]
   },
 
@@ -262,7 +219,7 @@ module.exports = {
         type: "choice",
         options: ["Kendim", "Eşim", "Çocuğum", "Ailem (Birden Fazla)"]
       },
-      { id: "ad_soyad", text: "Sigortalanacak kişinin ad soyadı nedir?", type: "text" },
+      { id: "ad_soyad", text: "Sigortalanacak kişinin ismi ve soyismi nedir?", type: "text" },
       {
         id: "dogum_tarihi",
         text: "Doğum tarihi nedir? (GG.AA.YYYY)",
@@ -277,9 +234,12 @@ module.exports = {
         options: ["Kadın", "Erkek"]
       },
       { id: "boy_kilo", text: "Boyu ve kilosu nedir? (Örn: 170 cm / 70 kg)", type: "text" },
-      { id: "meslek", text: "Mesleği nedir?", type: "text" },
-      { id: "il", text: "İkamet ettiği il neresidir?", type: "text" },
-      { id: "ilce", text: "İkamet ettiği ilçe neresidir?", type: "text" },
+      {
+        id: "il_ilce",
+        text: "İkamet ettiği il ve ilçe neresidir? (Örn: İstanbul / Kadıköy)",
+        type: "text"
+      },
+      { ...MESLEK_SORU_UCUNCU_SAHIS },
       {
         id: "tc_kimlik",
         text:
@@ -294,6 +254,7 @@ module.exports = {
 
   tss: {
     label: "TSS (Tamamlayıcı Sağlık Sigortası)",
+    menuLabel: "TSS (Tamamlayıcı Sig.)", // Urun secim listesinde WhatsApp'in 24 karakter siniri var
     agentNumber: "905380711711", // Bahadır - elementer branş (TSS)
     questions: [
       {
@@ -302,7 +263,7 @@ module.exports = {
         type: "choice",
         options: ["Kendim", "Eşim", "Çocuğum", "Ailem (Birden Fazla)"]
       },
-      { id: "ad_soyad", text: "Sigortalanacak kişinin ad soyadı nedir?", type: "text" },
+      { id: "ad_soyad", text: "Sigortalanacak kişinin ismi ve soyismi nedir?", type: "text" },
       {
         id: "dogum_tarihi",
         text: "Doğum tarihi nedir? (GG.AA.YYYY)",
@@ -317,9 +278,12 @@ module.exports = {
         options: ["Kadın", "Erkek"]
       },
       { id: "boy_kilo", text: "Boyu ve kilosu nedir? (Örn: 170 cm / 70 kg)", type: "text" },
-      { id: "meslek", text: "Mesleği nedir?", type: "text" },
-      { id: "il", text: "İkamet ettiği il neresidir?", type: "text" },
-      { id: "ilce", text: "İkamet ettiği ilçe neresidir?", type: "text" },
+      {
+        id: "il_ilce",
+        text: "İkamet ettiği il ve ilçe neresidir? (Örn: İstanbul / Kadıköy)",
+        type: "text"
+      },
+      { ...MESLEK_SORU_UCUNCU_SAHIS },
       {
         id: "tc_kimlik",
         text:
@@ -334,6 +298,7 @@ module.exports = {
 
   hayat: {
     label: "Prim İadeli Hayat Sigortası",
+    menuLabel: "Prim İadeli Hayat Sig.", // Urun secim listesinde WhatsApp'in 24 karakter siniri var
     agentNumber: "905326876126", // Enbel - danışman seçilmezse (Hayır derse) varsayılan buraya düşer
     // QR/link uzerinden gelen hazır mesaj bu metni içeriyorsa, bot direkt bu ürüne geçer.
     qrTrigger: /prim iadeli|hayat sigortas/i,
@@ -363,7 +328,7 @@ module.exports = {
         // Sadece bir onceki soruya "Evet" cevabi verildiyse sorulur.
         skipIf: (answers) => answers.danisman_gorustu_mu !== "Evet"
       },
-      { id: "ad_soyad", text: "Ad soyadınızı yazar mısınız?", type: "text" },
+      { id: "ad_soyad", text: "İsim ve soyisminizi yazar mısınız?", type: "text", sameAsAccountHolder: true },
       {
         id: "yas",
         text: "Kaç yaşındasınız?",
@@ -372,22 +337,20 @@ module.exports = {
         validationError: "Yaşınızı sadece rakamla yazar mısınız? (Örn: 35)"
       },
       {
-        id: "cinsiyet",
-        text: "Cinsiyetiniz nedir?",
-        type: "choice",
-        options: ["Kadın", "Erkek"]
+        id: "il_ilce",
+        text: "İkamet ettiğiniz il ve ilçe neresidir? (Örn: İstanbul / Kadıköy)",
+        type: "text"
       },
-      { id: "meslek", text: "Mesleğiniz nedir?", type: "text" },
-      { id: "il", text: "İkamet ettiğiniz il neresidir?", type: "text" },
-      { id: "ilce", text: "İkamet ettiğiniz ilçe neresidir?", type: "text" }
+      { ...MESLEK_SORU }
     ]
   },
 
   bes: {
     label: "Bireysel Emeklilik Sistemi (BES)",
+    menuLabel: "Bireysel Emeklilik(BES)", // Urun secim listesinde WhatsApp'in 24 karakter siniri var
     agentNumber: "905326876126", // Enbel - BES doğrudan buraya gider
     questions: [
-      { id: "ad_soyad", text: "Ad soyadınızı yazar mısınız?", type: "text" },
+      { id: "ad_soyad", text: "İsim ve soyisminizi yazar mısınız?", type: "text", sameAsAccountHolder: true },
       {
         id: "yas",
         text: "Kaç yaşındasınız?",
@@ -395,15 +358,6 @@ module.exports = {
         validate: yasGecerliMi,
         validationError: "Yaşınızı sadece rakamla yazar mısınız? (Örn: 35)"
       },
-      {
-        id: "cinsiyet",
-        text: "Cinsiyetiniz nedir?",
-        type: "choice",
-        options: ["Kadın", "Erkek"]
-      },
-      { id: "meslek", text: "Mesleğiniz nedir?", type: "text" },
-      { id: "il", text: "İkamet ettiğiniz il neresidir?", type: "text" },
-      { id: "ilce", text: "İkamet ettiğiniz ilçe neresidir?", type: "text" },
       {
         id: "bes_var_mi",
         text: "Herhangi bir şirkette bireysel emekliliğiniz var mı?",
@@ -419,31 +373,18 @@ module.exports = {
         id: "bes_birikim",
         text: "Yaklaşık birikim tutarınız nedir? Yoksa 'yok' yazabilirsiniz.",
         type: "text"
-      }
+      },
+      { ...SEHIR_SORU },
+      { ...MESLEK_SORU }
     ]
   },
 
   malpraktis: {
     label: "Hekim Sorumluluk Sigortası (Malpraktis)",
+    menuLabel: "Hekim Sor. (Malpraktis)", // Urun secim listesinde WhatsApp'in 24 karakter siniri var
     agentNumber: "905380711711", // Bahadır - elementer branş (Malpraktis)
     questions: [
-      { id: "ad_soyad", text: "Ad soyadınızı yazar mısınız?", type: "text" },
-      {
-        id: "tc_kimlik",
-        text: "T.C. kimlik numaranızı yazar mısınız?",
-        type: "text",
-        validate: tcKimlikGecerliMi,
-        validationError:
-          "Girdiğiniz T.C. kimlik numarası geçerli görünmüyor. 11 haneli olarak tekrar yazar mısınız?"
-      },
-      {
-        id: "dogum_tarihi",
-        text: "Doğum tarihiniz nedir? (GG.AA.YYYY)",
-        type: "text",
-        validate: tarihGecerliMi,
-        validationError: "Tarihi GG.AA.YYYY formatında yazar mısınız? (Örn: 15.05.1990)"
-      },
-      { id: "meslek", text: "Mesleğiniz nedir?", type: "text" },
+      { id: "ad_soyad", text: "İsim ve soyisminizi yazar mısınız?", type: "text", sameAsAccountHolder: true },
       { id: "uzmanlik_dali", text: "Uzmanlık dalınız nedir?", type: "text" },
       {
         id: "adres_tipi",
@@ -491,8 +432,9 @@ module.exports = {
         type: "choice",
         options: ["Evet", "Hayır"]
       },
-      { id: "il", text: "İkamet ettiğiniz il neresidir?", type: "text" },
-      { id: "ilce", text: "İkamet ettiğiniz ilçe neresidir?", type: "text" }
+      { ...SEHIR_SORU },
+      { ...MESLEK_SORU },
+      { ...TC_KIMLIK_SORU }
     ]
   }
 };
