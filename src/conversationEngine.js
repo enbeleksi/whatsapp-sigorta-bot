@@ -15,7 +15,7 @@ const KVKK_METNI =
   "Bilgilerinizi işleyebilmemiz için önce kısa bir onayınıza ihtiyacımız var. 📄\n\n" +
   "6698 sayılı Kişisel Verilerin Korunması Kanunu (KVKK) kapsamında; paylaşacağınız isim-soyisim, " +
   "T.C. kimlik no, iletişim ve talep bilgileriniz yalnızca sigorta teklifi hazırlama ve sizinle " +
-  "iletişime geçme amacıyla WE Sigorta tarafından işlenecek, üçüncü kişilerle paylaşılmayacaktır.\n\n" +
+  "iletişime geçme amacıyla WE Sigorta Aracılığı Anonim Şirketi tarafından işlenecek, üçüncü kişilerle paylaşılmayacaktır.\n\n" +
   "Devam etmek için onayınızı bekliyoruz.";
 const KVKK_SECENEKLERI = ["Kabul Ediyorum", "Kabul Etmiyorum"];
 
@@ -88,8 +88,11 @@ function nextValidIndex(flow, answers, fromIndex) {
 
 // Bir urunun soru akisini baslatir. Musterinin adi zaten biliniyorsa (session.name)
 // ve o urunun ad_soyad sorusu hesap sahibinin kendi adini soruyorsa (sameAsAccountHolder),
-// bu soruyu tekrar sormadan otomatik doldurur.
-function startProductFlow(session, productKey) {
+// bu soruyu tekrar sormadan otomatik doldurur. Urunun "intro" metni varsa,
+// direkt soru sormaya baslamadan once kisa bir tanitim mesaji gonderir - ancak
+// QR ile giriste (skipIntro=true) bu atlanir, cunku o zaten kendi karsilama
+// mesajini (qrGreeting) gostermis oluyor.
+async function startProductFlow(from, session, productKey, { skipIntro = false } = {}) {
   const flow = flows[productKey];
   session.product = productKey;
   session.answers = {};
@@ -101,6 +104,10 @@ function startProductFlow(session, productKey) {
 
   session.questionIndex = nextValidIndex(flow, session.answers, 0);
   session.state = "ASKING";
+
+  if (flow.intro && !skipIntro) {
+    await sendText(from, flow.intro);
+  }
 }
 
 // Bir oturum icin bilgilerin/bildirimin kime gidecegini belirler:
@@ -145,10 +152,28 @@ async function handleIncoming(from, message) {
     return;
   }
 
-  // Müşteri istediği an "temsilci" yazarak bir insanla görüşmek isteyebilir.
-  // Bota sicak bir mesajla cevap verdirip, ilgili danisman/temsilciye
-  // musterinin gorusme talebini WhatsApp'tan bildiriyoruz.
-  if (/temsilci|insan|musteri.?temsil/i.test(userText)) {
+  // Müşteri istediği an "temsilci" ya da "insan" yazarak her zaman bir
+  // insanla görüşmek isteyebilir - bunlar acik bir kacis kelimesi oldugu icin
+  // her baglamda gecerlidir. "Danışman"/"sigortacı" kelimeleri de ayni
+  // yonlendirmeyi tetikler, ANCAK "Daha once bir danismanla gorustunuz mu?"
+  // ve "Hangi danismanimizla gorustunuz?" sorularinin cevabinda bu kelimeler
+  // dogal olarak gecebildigi icin, o iki soruda bu kelimeler devre disi
+  // birakilir (cevap normal sekilde islensin diye).
+  const INSAN_YONLENDIRME_HER_ZAMAN = ["temsilci", "insan", "musteri temsil"];
+  const INSAN_YONLENDIRME_BAGLAMSAL = ["danisman", "sigortaci"];
+
+  const currentFlow = session.product ? flows[session.product] : null;
+  const currentQuestionId =
+    session.state === "ASKING" && currentFlow ? currentFlow.questions[session.questionIndex]?.id : null;
+  const danismanSorusundaMiyiz =
+    currentQuestionId === "danisman_gorustu_mu" || currentQuestionId === "danisman_adi";
+
+  const normalizedUserText = normalizeTr(userText);
+  const insanaYonlendirmeGerekiyorMu =
+    INSAN_YONLENDIRME_HER_ZAMAN.some((k) => normalizedUserText.includes(k)) ||
+    (!danismanSorusundaMiyiz && INSAN_YONLENDIRME_BAGLAMSAL.some((k) => normalizedUserText.includes(k)));
+
+  if (insanaYonlendirmeGerekiyorMu) {
     session.paused = true;
     await sendText(
       from,
@@ -240,7 +265,7 @@ async function handleIncoming(from, message) {
       if (session.pendingProduct) {
         const key = session.pendingProduct;
         session.pendingProduct = null;
-        startProductFlow(session, key);
+        await startProductFlow(from, session, key, { skipIntro: true });
         await askCurrentQuestion(from, session);
       } else {
         session.state = "ASK_NAME";
@@ -277,7 +302,7 @@ async function handleIncoming(from, message) {
         break;
       }
       const idx = PRODUCT_LABELS.indexOf(matchedLabel);
-      startProductFlow(session, PRODUCT_KEYS[idx]);
+      await startProductFlow(from, session, PRODUCT_KEYS[idx]);
       await askCurrentQuestion(from, session);
       break;
     }
@@ -315,6 +340,21 @@ async function handleIncoming(from, message) {
       }
 
       session.questionIndex = nextValidIndex(flow, session.answers, session.questionIndex + 1);
+
+      // Hayat sigortasinda danisman sorusu tamamlaninca (Hayir dedi ya da bir
+      // danisman sectiyse) direkt "kac yasindasiniz" gibi bir soruya gecmek
+      // bağlami koparıyordu. Araya kisa bir tanitim + gecis mesaji ekleyelim.
+      const danismanSorusuBittiMi =
+        session.product === "hayat" &&
+        ((currentQuestion.id === "danisman_gorustu_mu" && session.answers.danisman_gorustu_mu === "Hayır") ||
+          currentQuestion.id === "danisman_adi");
+      if (danismanSorusuBittiMi) {
+        await sendText(
+          from,
+          "Prim İadeli Hayat Sigortamız, sevdiklerinizi güvence altına alırken kullanılmayan primlerinizi de size geri veriyor. 🎁\n\n" +
+            "Sizi en uygun danışmanımıza yönlendirmeden önce birkaç bilgi alalım."
+        );
+      }
 
       if (session.questionIndex >= flow.questions.length) {
         await finishFlow(from, session);
