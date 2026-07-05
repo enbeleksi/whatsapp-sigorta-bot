@@ -55,6 +55,8 @@ const SEHIR_SORU = {
 module.exports = {
   dask: {
     label: "DASK",
+    intro:
+      "DASK, deprem ve deprem sonucu oluşabilecek hasarlara karşı konutunuzu güvence altına alan zorunlu bir sigortadır. Teklifinizi hazırlamak için birkaç bilgi alalım. 🏠",
     agentNumber: "905380711711", // Bahadır - elementer branş (DASK)
     // QR kodundan gelen hazır mesaj bu metni içeriyorsa, bot direkt bu ürüne geçer
     // ve aşağıdaki sıcak karşılama mesajıyla başlar (ürün seçim listesi atlanır).
@@ -115,6 +117,8 @@ module.exports = {
 
   konut: {
     label: "Konut Sigortası",
+    intro:
+      "Konut Sigortası, eviniz ve eşyalarınızı yangın, hırsızlık, su baskını gibi risklere karşı güvence altına alır. Teklifinizi hazırlamak için birkaç bilgi alalım. 🏠",
     agentNumber: "905380711711", // Bahadır - elementer branş (Konut)
     questions: [
       { id: "ad_soyad", text: "İsim ve soyisminizi yazar mısınız?", type: "text", sameAsAccountHolder: true },
@@ -170,6 +174,8 @@ module.exports = {
 
   trafik: {
     label: "Trafik Sigortası",
+    intro:
+      "Trafik Sigortası, bir kaza durumunda karşı tarafa vereceğiniz zararları güvence altına alan, yasal olarak zorunlu bir sigortadır. Teklifinizi hazırlamak için birkaç bilgi alalım. 🚗",
     agentNumber: "905380711711", // Bahadır - elementer branş (Trafik)
     qrTrigger: /trafik/i,
     qrGreeting:
@@ -192,6 +198,8 @@ module.exports = {
 
   kasko: {
     label: "Kasko Sigortası",
+    intro:
+      "Kasko, aracınızı kaza, hırsızlık, yangın gibi risklere karşı güvence altına alır. Teklifinizi hazırlamak için birkaç bilgi alalım. 🚗",
     agentNumber: "905380711711", // Bahadır - elementer branş (Kasko)
     questions: [
       { id: "ad_soyad", text: "İsim ve soyisminizi yazar mısınız?", type: "text", sameAsAccountHolder: true },
@@ -211,6 +219,8 @@ module.exports = {
 
   ozel_saglik: {
     label: "Özel Sağlık Sigortası",
+    intro:
+      "Özel Sağlık Sigortası, özel hastanelerde hızlı ve kapsamlı sağlık hizmetine erişmenizi sağlar. Teklifinizi hazırlamak için birkaç bilgi alalım. 💙",
     agentNumber: "905380711711", // Bahadır - elementer branş (Özel Sağlık)
     questions: [
       {
@@ -254,6 +264,8 @@ module.exports = {
 
   tss: {
     label: "TSS (Tamamlayıcı Sağlık Sigortası)",
+    intro:
+      "TSS, SGK'nın karşılamadığı sağlık giderlerinizi tamamlayarak özel sağlık hizmetlerine daha uygun fiyatlarla erişmenizi sağlar. Teklifinizi hazırlamak için birkaç bilgi alalım. 💙",
     menuLabel: "TSS (Tamamlayıcı Sig.)", // Urun secim listesinde WhatsApp'in 24 karakter siniri var
     agentNumber: "905380711711", // Bahadır - elementer branş (TSS)
     questions: [
@@ -347,6 +359,8 @@ module.exports = {
 
   bes: {
     label: "Bireysel Emeklilik Sistemi (BES)",
+    intro:
+      "Bireysel Emeklilik Sistemi, geleceğinize yatırım yaparken devlet katkısından da faydalanmanızı sağlar. Teklifinizi hazırlamak için birkaç bilgi alalım. 💰",
     menuLabel: "Bireysel Emeklilik(BES)", // Urun secim listesinde WhatsApp'in 24 karakter siniri var
     agentNumber: "905326876126", // Enbel - BES doğrudan buraya gider
     questions: [
@@ -381,6 +395,8 @@ module.exports = {
 
   malpraktis: {
     label: "Hekim Sorumluluk Sigortası (Malpraktis)",
+    intro:
+      "Hekim Sorumluluk Sigortası, mesleki uygulamalarınız sırasında oluşabilecek olası taleplere karşı sizi güvence altına alır. Teklifinizi hazırlamak için birkaç bilgi alalım. 🩺",
     menuLabel: "Hekim Sor. (Malpraktis)", // Urun secim listesinde WhatsApp'in 24 karakter siniri var
     agentNumber: "905380711711", // Bahadır - elementer branş (Malpraktis)
     questions: [
