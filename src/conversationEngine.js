@@ -4,13 +4,16 @@ const messageLog = require("./messageLog");
 const flows = require("./flows");
 
 const PRODUCT_KEYS = Object.keys(flows);
-const PRODUCT_LABELS = PRODUCT_KEYS.map((k) => flows[k].label);
+// Urun secim listesinde WhatsApp'in 24 karakter siniri oldugu icin, uzun urun
+// isimlerinde flows.js'deki kisa "menuLabel" kullanilir; yoksa tam "label" kullanilir.
+// Ozet/bildirim mesajlarinda ise her zaman tam "label" kullanilmaya devam eder.
+const PRODUCT_LABELS = PRODUCT_KEYS.map((k) => flows[k].menuLabel || flows[k].label);
 
 // KVKK (Kisisel Verilerin Korunmasi Kanunu) onay metni. Musteriden herhangi bir
 // kisisel veri (ad, TC kimlik no vb.) toplanmadan once bu onayin alinmasi gerekir.
 const KVKK_METNI =
   "Bilgilerinizi işleyebilmemiz için önce kısa bir onayınıza ihtiyacımız var. 📄\n\n" +
-  "6698 sayılı Kişisel Verilerin Korunması Kanunu (KVKK) kapsamında; paylaşacağınız ad-soyad, " +
+  "6698 sayılı Kişisel Verilerin Korunması Kanunu (KVKK) kapsamında; paylaşacağınız isim-soyisim, " +
   "T.C. kimlik no, iletişim ve talep bilgileriniz yalnızca sigorta teklifi hazırlama ve sizinle " +
   "iletişime geçme amacıyla WE Sigorta tarafından işlenecek, üçüncü kişilerle paylaşılmayacaktır.\n\n" +
   "Devam etmek için onayınızı bekliyoruz.";
@@ -67,14 +70,37 @@ function matchOption(userText, options) {
   );
 }
 
-// Bazi sorular onceki cevaba gore atlanabilir (question.skipIf(answers) => true/false).
-// Verilen index'ten baslayarak atlanmasi gereken sorular varsa ileri kaydirir.
+// Bazi sorular onceki cevaba gore atlanabilir (question.skipIf(answers) => true/false),
+// bazilari da onceden zaten cevaplanmis olabilir (orn. isim zaten alinmissa "ad_soyad"
+// sorusu tekrar sorulmaz). Verilen index'ten baslayarak atlanmasi gereken sorular
+// varsa ileri kaydirir.
 function nextValidIndex(flow, answers, fromIndex) {
   let idx = fromIndex;
-  while (idx < flow.questions.length && flow.questions[idx].skipIf && flow.questions[idx].skipIf(answers)) {
+  while (idx < flow.questions.length) {
+    const q = flow.questions[idx];
+    const skippedByRule = q.skipIf && q.skipIf(answers);
+    const alreadyAnswered = Object.prototype.hasOwnProperty.call(answers, q.id) && answers[q.id];
+    if (!skippedByRule && !alreadyAnswered) break;
     idx += 1;
   }
   return idx;
+}
+
+// Bir urunun soru akisini baslatir. Musterinin adi zaten biliniyorsa (session.name)
+// ve o urunun ad_soyad sorusu hesap sahibinin kendi adini soruyorsa (sameAsAccountHolder),
+// bu soruyu tekrar sormadan otomatik doldurur.
+function startProductFlow(session, productKey) {
+  const flow = flows[productKey];
+  session.product = productKey;
+  session.answers = {};
+
+  const adSoyadQuestion = flow.questions.find((q) => q.id === "ad_soyad");
+  if (session.name && adSoyadQuestion && adSoyadQuestion.sameAsAccountHolder) {
+    session.answers.ad_soyad = session.name;
+  }
+
+  session.questionIndex = nextValidIndex(flow, session.answers, 0);
+  session.state = "ASKING";
 }
 
 // Bir oturum icin bilgilerin/bildirimin kime gidecegini belirler:
@@ -213,15 +239,12 @@ async function handleIncoming(from, message) {
       // sorularina, yoksa normal isim sorma adimina geciyoruz.
       if (session.pendingProduct) {
         const key = session.pendingProduct;
-        session.product = key;
         session.pendingProduct = null;
-        session.questionIndex = nextValidIndex(flows[key], {}, 0);
-        session.answers = {};
-        session.state = "ASKING";
+        startProductFlow(session, key);
         await askCurrentQuestion(from, session);
       } else {
         session.state = "ASK_NAME";
-        await sendText(from, "Teşekkürler! 😊 Öncelikle adınızı ve soyadınızı öğrenebilir miyim?");
+        await sendText(from, "Teşekkürler! 😊 Öncelikle isminizi ve soyisminizi öğrenebilir miyim?");
       }
       break;
     }
@@ -239,10 +262,12 @@ async function handleIncoming(from, message) {
     }
 
     case "ASK_PRODUCT": {
-      const idx = PRODUCT_LABELS.findIndex(
-        (label) => label.toLowerCase() === userText.toLowerCase()
-      );
-      if (idx === -1) {
+      // WhatsApp liste mesajlarinda secenekler 24 karakterle sinirli, uzun urun
+      // isimleri (orn. "Prim Iadeli Hayat Sigortasi") kesilerek geri donebiliyor.
+      // Bu yuzden tam eslesme yerine matchOption'in esnek/on-ek toleransli
+      // eslestirmesini kullaniyoruz.
+      const matchedLabel = matchOption(userText, PRODUCT_LABELS);
+      if (!matchedLabel) {
         await sendList(
           from,
           "Üzgünüm, listeden bir seçenek seçmeniz gerekiyor. Lütfen tekrar seçin:",
@@ -251,10 +276,8 @@ async function handleIncoming(from, message) {
         );
         break;
       }
-      session.product = PRODUCT_KEYS[idx];
-      session.questionIndex = nextValidIndex(flows[PRODUCT_KEYS[idx]], {}, 0);
-      session.answers = {};
-      session.state = "ASKING";
+      const idx = PRODUCT_LABELS.indexOf(matchedLabel);
+      startProductFlow(session, PRODUCT_KEYS[idx]);
       await askCurrentQuestion(from, session);
       break;
     }
