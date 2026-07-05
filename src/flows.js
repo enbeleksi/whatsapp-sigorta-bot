@@ -1,99 +1,498 @@
 // Her urun icin sorulacak sorular burada tanimlanir.
 // Yeni bir sigorta urunu eklemek icin bu dosyaya yeni bir key eklemeniz yeterli.
-// type: "text" (serbest metin) | "choice" (secenekli - WhatsApp buton/liste ile sorulur)
+//
+// question.type: "text" (serbest metin) | "choice" (secenekli - WhatsApp buton/liste ile sorulur)
+// question.text: normalde bir string'dir. Bazen (orn. "kiracıysanız ev sahibinin TC'si"
+//   gibi) onceki cevaba gore soru metninin degismesi gerekir - bu durumda text bir
+//   fonksiyon olabilir: (answers) => "soru metni". answers, o ana kadar verilen
+//   tum cevaplari icerir (id -> cevap).
+// question.validate: (metin) => true/false. Sadece "text" tipi sorularda kullanilir.
+//   Belirtilirse ve false donerse, bot ayni soruyu question.validationError mesajiyla
+//   birlikte tekrar sorar (bir sonraki soruya gecmez).
+//
+// product.agentNumber: bu urunle ilgilenen calisanin WhatsApp numarasi (basinda ulke
+//   kodu, orn: 905321234567). Doldurulmazsa (yani "905XXXXXXXXX" placeholder olarak
+//   kalirsa) sistem otomatik olarak Railway'deki genel AGENT_WHATSAPP_NUMBER'a duser.
+
+const {
+  tcKimlikGecerliMi,
+  tarihGecerliMi,
+  yasGecerliMi,
+  pozitifSayiMi,
+  yilGecerliMi,
+  plakaGecerliMi
+} = require("./validators");
 
 module.exports = {
-  kasko: {
-    label: "Kasko Sigortasi",
-    questions: [
-      { id: "plaka", text: "Aracinizin plakasini yazar misiniz? (Orn: 34 ABC 123)", type: "text" },
-      { id: "marka_model", text: "Aracin marka ve modeli nedir? (Orn: Toyota Corolla)", type: "text" },
-      { id: "model_yili", text: "Aracin model yili nedir?", type: "text" },
-      {
-        id: "kullanim_amaci",
-        text: "Araci ozel mi yoksa ticari amacla mi kullaniyorsunuz?",
-        type: "choice",
-        options: ["Ozel", "Ticari"]
-      },
-      { id: "hasarsizlik", text: "Hasarsizlik basamaginizi biliyor musunuz? Biliyorsaniz yazin, bilmiyorsaniz 'bilmiyorum' yazabilirsiniz.", type: "text" },
-      { id: "onceki_police", text: "Daha once kaskonuz var miydi? Varsa hangi sirketteydi ve police bitis tarihi nedir?", type: "text" },
-      { id: "surucu_dogum", text: "Surucunun dogum tarihi nedir? (GG.AA.YYYY)", type: "text" },
-      { id: "ehliyet_tarihi", text: "Ehliyet alma tarihiniz nedir? (GG.AA.YYYY)", type: "text" }
-    ]
-  },
-
-  trafik: {
-    label: "Trafik Sigortasi",
-    questions: [
-      { id: "plaka", text: "Aracinizin plakasini yazar misiniz? (Orn: 34 ABC 123)", type: "text" },
-      { id: "tescil_tarihi", text: "Aracin ilk tescil tarihi nedir? (GG.AA.YYYY)", type: "text" },
-      { id: "tc_kimlik", text: "Ruhsat sahibinin T.C. kimlik numarasi nedir?", type: "text" },
-      { id: "onceki_sirket", text: "Su anki/onceki trafik sigortaniz hangi sirkette, police bitis tarihi nedir?", type: "text" }
-    ]
-  },
-
-  saglik: {
-    label: "Saglik Sigortasi",
-    questions: [
-      { id: "ad_soyad", text: "Sigorta yaptirilacak kisinin ad soyadi nedir?", type: "text" },
-      { id: "dogum_tarihi", text: "Dogum tarihi nedir? (GG.AA.YYYY)", type: "text" },
-      { id: "tc_kimlik", text: "T.C. kimlik numarasi nedir?", type: "text" },
-      {
-        id: "sigara",
-        text: "Sigara kullaniyor musunuz?",
-        type: "choice",
-        options: ["Evet", "Hayir"]
-      },
-      { id: "kronik_rahatsizlik", text: "Bilinen bir kronik rahatsizliginiz veya suregelen tedaviniz var mi? Varsa kisaca belirtir misiniz?", type: "text" },
-      {
-        id: "aile_dahil",
-        text: "Policeye es/cocuk gibi aile bireylerini de dahil etmek ister misiniz?",
-        type: "choice",
-        options: ["Evet", "Hayir"]
-      }
-    ]
-  },
-
   dask: {
-    label: "DASK (Zorunlu Deprem Sigortasi)",
+    label: "DASK",
+    agentNumber: "905380711711", // Bahadır - elementer branş (DASK)
+    // QR kodundan gelen hazır mesaj bu metni içeriyorsa, bot direkt bu ürüne geçer
+    // ve aşağıdaki sıcak karşılama mesajıyla başlar (ürün seçim listesi atlanır).
+    qrTrigger: /dask/i,
+    qrGreeting:
+      "Merhaba! 😊 Yeni eviniz hayırlı olsun, içinde huzur dolu günler geçirmenizi dileriz! 🏠💛 DASK poliçenizi hemen hazırlayabilmemiz için birkaç bilgi alalım, olur mu?",
     questions: [
-      { id: "adres", text: "Sigortalanacak konutun tam adresi nedir? (Il / Ilce / Mahalle)", type: "text" },
-      { id: "bina_yasi", text: "Binanin yapim yili (yaklasik) nedir?", type: "text" },
+      { id: "ad_soyad", text: "Ad soyadınızı yazar mısınız?", type: "text" },
       {
-        id: "yapi_tarzi",
-        text: "Binanin yapi tarzi nedir?",
-        type: "choice",
-        options: ["Betonarme", "Yigma", "Diger"]
+        id: "dogum_tarihi",
+        text: "Doğum tarihiniz nedir? (GG.AA.YYYY)",
+        type: "text",
+        validate: tarihGecerliMi,
+        validationError: "Tarihi GG.AA.YYYY formatında yazar mısınız? (Örn: 15.05.1990)"
       },
-      { id: "metrekare", text: "Konutun brut metrekaresi nedir?", type: "text" },
-      { id: "kat_sayisi", text: "Binanin kat sayisi ve dairenin bulundugu kat kacinci kattir?", type: "text" }
+      {
+        id: "cinsiyet",
+        text: "Cinsiyetiniz nedir?",
+        type: "choice",
+        options: ["Kadın", "Erkek"]
+      },
+      { id: "meslek", text: "Mesleğiniz nedir?", type: "text" },
+      { id: "il", text: "İkamet ettiğiniz il neresidir?", type: "text" },
+      { id: "ilce", text: "İkamet ettiğiniz ilçe neresidir?", type: "text" },
+      {
+        id: "mulkiyet_durumu",
+        text: "Sigortalanacak konut size mi ait, yoksa kiracı mısınız?",
+        type: "choice",
+        options: ["Ev Sahibiyim", "Kiracıyım"]
+      },
+      {
+        id: "tc_kimlik",
+        text: (answers) =>
+          answers.mulkiyet_durumu === "Kiracıyım"
+            ? "Ev sahibinin T.C. kimlik numarasını yazar mısınız? (Poliçeyi bu bilgiyle hazırlayacağız)"
+            : "T.C. kimlik numaranızı yazar mısınız? (Poliçeyi bu bilgiyle hazırlayacağız)",
+        type: "text",
+        validate: tcKimlikGecerliMi,
+        validationError:
+          "Girdiğiniz T.C. kimlik numarası geçerli görünmüyor. 11 haneli olarak tekrar yazar mısınız?"
+      },
+      {
+        id: "daini_murtehin",
+        text:
+          "Poliçe üzerinde dain-i mürtehin (ipotekli banka) var mı? Varsa Banka Adı, Banka Şubesi ve Kredi Döviz Türünü yazar mısınız? Yoksa 'yok' yazabilirsiniz.",
+        type: "text"
+      },
+      { id: "adres", text: "Sigortalanacak konutun açık adresi nedir?", type: "text" },
+      {
+        id: "yuz_olcumu",
+        text: "Konutun yüz ölçümü (m²) nedir?",
+        type: "text",
+        validate: pozitifSayiMi,
+        validationError: "Yüz ölçümünü sadece rakamla yazar mısınız? (Örn: 120)"
+      },
+      {
+        id: "insaat_yili",
+        text: "Binanın inşaat yılı nedir?",
+        type: "text",
+        validate: yilGecerliMi,
+        validationError: "İnşaat yılını 4 haneli olarak yazar mısınız? (Örn: 2015)"
+      },
+      {
+        id: "bina_kat_sayisi",
+        text: "Binanın kat sayısı kaçtır?",
+        type: "text",
+        validate: pozitifSayiMi,
+        validationError: "Kat sayısını sadece rakamla yazar mısınız? (Örn: 5)"
+      },
+      { id: "dairenin_bulundugu_kat", text: "Dairenin bulunduğu kat kaçıncı kattır?", type: "text" }
     ]
   },
 
   konut: {
-    label: "Konut Sigortasi",
+    label: "Konut Sigortası",
+    agentNumber: "905380711711", // Bahadır - elementer branş (Konut)
     questions: [
-      { id: "adres", text: "Sigortalanacak konutun tam adresi nedir?", type: "text" },
-      { id: "metrekare", text: "Konutun brut metrekaresi nedir?", type: "text" },
-      { id: "bina_yasi", text: "Binanin yapim yili (yaklasik) nedir?", type: "text" },
+      { id: "ad_soyad", text: "Ad soyadınızı yazar mısınız?", type: "text" },
       {
-        id: "mulkiyet",
-        text: "Konut size mi ait, yoksa kiraci misiniz?",
-        type: "choice",
-        options: ["Ev sahibiyim", "Kiraciyim"]
+        id: "dogum_tarihi",
+        text: "Doğum tarihiniz nedir? (GG.AA.YYYY)",
+        type: "text",
+        validate: tarihGecerliMi,
+        validationError: "Tarihi GG.AA.YYYY formatında yazar mısınız? (Örn: 15.05.1990)"
       },
-      { id: "esya_degeri", text: "Ev esyalarinizin yaklasik toplam degeri nedir? (TL)", type: "text" }
+      {
+        id: "cinsiyet",
+        text: "Cinsiyetiniz nedir?",
+        type: "choice",
+        options: ["Kadın", "Erkek"]
+      },
+      { id: "meslek", text: "Mesleğiniz nedir?", type: "text" },
+      { id: "il", text: "İkamet ettiğiniz il neresidir?", type: "text" },
+      { id: "ilce", text: "İkamet ettiğiniz ilçe neresidir?", type: "text" },
+      {
+        id: "mulkiyet_durumu",
+        text: "Sigortalanacak konut size mi ait, yoksa kiracı mısınız?",
+        type: "choice",
+        options: ["Ev Sahibiyim", "Kiracıyım"]
+      },
+      {
+        id: "tc_kimlik",
+        text: (answers) =>
+          answers.mulkiyet_durumu === "Kiracıyım"
+            ? "Ev sahibinin T.C. kimlik numarasını yazar mısınız? (Poliçeyi bu bilgiyle hazırlayacağız)"
+            : "T.C. kimlik numaranızı yazar mısınız? (Poliçeyi bu bilgiyle hazırlayacağız)",
+        type: "text",
+        validate: tcKimlikGecerliMi,
+        validationError:
+          "Girdiğiniz T.C. kimlik numarası geçerli görünmüyor. 11 haneli olarak tekrar yazar mısınız?"
+      },
+      {
+        id: "daini_murtehin",
+        text:
+          "Poliçe üzerinde dain-i mürtehin (ipotekli banka) var mı? Varsa Banka Adı, Banka Şubesi ve Kredi Döviz Türünü yazar mısınız? Yoksa 'yok' yazabilirsiniz.",
+        type: "text"
+      },
+      { id: "adres", text: "Sigortalanacak konutun açık adresi nedir?", type: "text" },
+      {
+        id: "yuz_olcumu",
+        text: "Konutun yüz ölçümü (m²) nedir?",
+        type: "text",
+        validate: pozitifSayiMi,
+        validationError: "Yüz ölçümünü sadece rakamla yazar mısınız? (Örn: 120)"
+      },
+      {
+        id: "insaat_yili",
+        text: "Binanın inşaat yılı nedir?",
+        type: "text",
+        validate: yilGecerliMi,
+        validationError: "İnşaat yılını 4 haneli olarak yazar mısınız? (Örn: 2015)"
+      },
+      {
+        id: "bina_kat_sayisi",
+        text: "Binanın kat sayısı kaçtır?",
+        type: "text",
+        validate: pozitifSayiMi,
+        validationError: "Kat sayısını sadece rakamla yazar mısınız? (Örn: 5)"
+      },
+      { id: "dairenin_bulundugu_kat", text: "Dairenin bulunduğu kat kaçıncı kattır?", type: "text" }
     ]
   },
 
-  seyahat: {
-    label: "Seyahat Sigortasi",
+  trafik: {
+    label: "Trafik Sigortası",
+    agentNumber: "905380711711", // Bahadır - elementer branş (Trafik)
+    qrTrigger: /trafik/i,
+    qrGreeting:
+      "Merhaba! 😊 Yeni aracınız hayırlı olsun, güle güle kullanın! 🚗✨ Trafik sigortanızı en kısa sürede hazırlayabilmemiz için birkaç küçük bilgiye ihtiyacımız olacak, hemen başlayalım mı?",
     questions: [
-      { id: "gidilecek_ulke", text: "Hangi ulke/ulkelere seyahat edeceksiniz?", type: "text" },
-      { id: "tarihler", text: "Seyahat baslangic ve bitis tarihleri nedir? (GG.AA.YYYY - GG.AA.YYYY)", type: "text" },
-      { id: "kisi_sayisi", text: "Kac kisi icin sigorta yaptirmak istiyorsunuz?", type: "text" },
-      { id: "yas_bilgileri", text: "Seyahat edecek kisilerin dogum tarihlerini yazar misiniz?", type: "text" },
-      { id: "seyahat_amaci", text: "Seyahat amaciniz nedir? (Turizm, is, egitim vb.)", type: "text" }
+      { id: "ad_soyad", text: "Ad soyadınızı yazar mısınız?", type: "text" },
+      {
+        id: "tc_kimlik",
+        text: "T.C. kimlik numaranızı yazar mısınız?",
+        type: "text",
+        validate: tcKimlikGecerliMi,
+        validationError:
+          "Girdiğiniz T.C. kimlik numarası geçerli görünmüyor. 11 haneli olarak tekrar yazar mısınız?"
+      },
+      {
+        id: "dogum_tarihi",
+        text: "Doğum tarihiniz nedir? (GG.AA.YYYY)",
+        type: "text",
+        validate: tarihGecerliMi,
+        validationError: "Tarihi GG.AA.YYYY formatında yazar mısınız? (Örn: 15.05.1990)"
+      },
+      {
+        id: "cinsiyet",
+        text: "Cinsiyetiniz nedir?",
+        type: "choice",
+        options: ["Kadın", "Erkek"]
+      },
+      { id: "meslek", text: "Mesleğiniz nedir?", type: "text" },
+      { id: "il", text: "İkamet ettiğiniz il neresidir?", type: "text" },
+      { id: "ilce", text: "İkamet ettiğiniz ilçe neresidir?", type: "text" },
+      {
+        id: "plaka",
+        text: "Aracınızın plakası nedir? (Örn: 34 ABC 123)",
+        type: "text",
+        validate: plakaGecerliMi,
+        validationError: "Plakayı doğru formatta yazar mısınız? (Örn: 34 ABC 123)"
+      },
+      { id: "ruhsat_seri_no", text: "Ruhsat belge seri numarası nedir?", type: "text" }
+    ]
+  },
+
+  kasko: {
+    label: "Kasko Sigortası",
+    agentNumber: "905380711711", // Bahadır - elementer branş (Kasko)
+    questions: [
+      { id: "ad_soyad", text: "Ad soyadınızı yazar mısınız?", type: "text" },
+      {
+        id: "tc_kimlik",
+        text: "T.C. kimlik numaranızı yazar mısınız?",
+        type: "text",
+        validate: tcKimlikGecerliMi,
+        validationError:
+          "Girdiğiniz T.C. kimlik numarası geçerli görünmüyor. 11 haneli olarak tekrar yazar mısınız?"
+      },
+      {
+        id: "dogum_tarihi",
+        text: "Doğum tarihiniz nedir? (GG.AA.YYYY)",
+        type: "text",
+        validate: tarihGecerliMi,
+        validationError: "Tarihi GG.AA.YYYY formatında yazar mısınız? (Örn: 15.05.1990)"
+      },
+      {
+        id: "cinsiyet",
+        text: "Cinsiyetiniz nedir?",
+        type: "choice",
+        options: ["Kadın", "Erkek"]
+      },
+      { id: "meslek", text: "Mesleğiniz nedir?", type: "text" },
+      { id: "il", text: "İkamet ettiğiniz il neresidir?", type: "text" },
+      { id: "ilce", text: "İkamet ettiğiniz ilçe neresidir?", type: "text" },
+      {
+        id: "plaka",
+        text: "Aracınızın plakası nedir? (Örn: 34 ABC 123)",
+        type: "text",
+        validate: plakaGecerliMi,
+        validationError: "Plakayı doğru formatta yazar mısınız? (Örn: 34 ABC 123)"
+      },
+      { id: "ruhsat_seri_no", text: "Ruhsat belge seri numarası nedir?", type: "text" }
+    ]
+  },
+
+  ozel_saglik: {
+    label: "Özel Sağlık Sigortası",
+    agentNumber: "905380711711", // Bahadır - elementer branş (Özel Sağlık)
+    questions: [
+      {
+        id: "kimin_icin",
+        text: "Kimin için sigorta yaptırmak istiyorsunuz?",
+        type: "choice",
+        options: ["Kendim", "Eşim", "Çocuğum", "Ailem (Birden Fazla)"]
+      },
+      { id: "ad_soyad", text: "Sigortalanacak kişinin ad soyadı nedir?", type: "text" },
+      {
+        id: "dogum_tarihi",
+        text: "Doğum tarihi nedir? (GG.AA.YYYY)",
+        type: "text",
+        validate: tarihGecerliMi,
+        validationError: "Tarihi GG.AA.YYYY formatında yazar mısınız? (Örn: 15.05.1990)"
+      },
+      {
+        id: "cinsiyet",
+        text: "Cinsiyeti nedir?",
+        type: "choice",
+        options: ["Kadın", "Erkek"]
+      },
+      { id: "boy_kilo", text: "Boyu ve kilosu nedir? (Örn: 170 cm / 70 kg)", type: "text" },
+      { id: "meslek", text: "Mesleği nedir?", type: "text" },
+      { id: "il", text: "İkamet ettiği il neresidir?", type: "text" },
+      { id: "ilce", text: "İkamet ettiği ilçe neresidir?", type: "text" },
+      {
+        id: "tc_kimlik",
+        text:
+          "Teklifinizi hazırlayabilmemiz için son olarak T.C. kimlik numarasına ihtiyacımız var. Bu bilgi sadece teklif hazırlığı amacıyla kullanılacak ve güvenle saklanacaktır.",
+        type: "text",
+        validate: tcKimlikGecerliMi,
+        validationError:
+          "Girdiğiniz T.C. kimlik numarası geçerli görünmüyor. 11 haneli olarak tekrar yazar mısınız?"
+      }
+    ]
+  },
+
+  tss: {
+    label: "TSS (Tamamlayıcı Sağlık Sigortası)",
+    agentNumber: "905380711711", // Bahadır - elementer branş (TSS)
+    questions: [
+      {
+        id: "kimin_icin",
+        text: "Kimin için sigorta yaptırmak istiyorsunuz?",
+        type: "choice",
+        options: ["Kendim", "Eşim", "Çocuğum", "Ailem (Birden Fazla)"]
+      },
+      { id: "ad_soyad", text: "Sigortalanacak kişinin ad soyadı nedir?", type: "text" },
+      {
+        id: "dogum_tarihi",
+        text: "Doğum tarihi nedir? (GG.AA.YYYY)",
+        type: "text",
+        validate: tarihGecerliMi,
+        validationError: "Tarihi GG.AA.YYYY formatında yazar mısınız? (Örn: 15.05.1990)"
+      },
+      {
+        id: "cinsiyet",
+        text: "Cinsiyeti nedir?",
+        type: "choice",
+        options: ["Kadın", "Erkek"]
+      },
+      { id: "boy_kilo", text: "Boyu ve kilosu nedir? (Örn: 170 cm / 70 kg)", type: "text" },
+      { id: "meslek", text: "Mesleği nedir?", type: "text" },
+      { id: "il", text: "İkamet ettiği il neresidir?", type: "text" },
+      { id: "ilce", text: "İkamet ettiği ilçe neresidir?", type: "text" },
+      {
+        id: "tc_kimlik",
+        text:
+          "Teklifinizi hazırlayabilmemiz için son olarak T.C. kimlik numarasına ihtiyacımız var. Bu bilgi sadece teklif hazırlığı amacıyla kullanılacak ve güvenle saklanacaktır.",
+        type: "text",
+        validate: tcKimlikGecerliMi,
+        validationError:
+          "Girdiğiniz T.C. kimlik numarası geçerli görünmüyor. 11 haneli olarak tekrar yazar mısınız?"
+      }
+    ]
+  },
+
+  hayat: {
+    label: "Prim İadeli Hayat Sigortası",
+    agentNumber: "905326876126", // Enbel - danışman seçilmezse (Hayır derse) varsayılan buraya düşer
+    // QR/link uzerinden gelen hazır mesaj bu metni içeriyorsa, bot direkt bu ürüne geçer.
+    qrTrigger: /prim iadeli|hayat sigortas/i,
+    qrGreeting:
+      "Merhaba! 😊 Hayat sigortası ile ilgilendiğiniz için teşekkür ederiz. Size en uygun teklifi hazırlayabilmemiz için birkaç bilgi alalım, olur mu?",
+    // Bu urunle ilgilenen danismanlar. Musteri daha once bir danismanla
+    // gorustuyse, toplanan bilgiler o danismanin numarasina gider.
+    // Ekip degistikce bu listeyi guncelleyebilirsiniz (isim + WhatsApp numarasi).
+    advisors: [
+      { name: "Enbel", number: "905326876126" },
+      { name: "Fırat", number: "905527902616" },
+      { name: "Seda", number: "905324176026" },
+      { name: "Bahadır", number: "905380711711" }
+    ],
+    questions: [
+      {
+        id: "danisman_gorustu_mu",
+        text: "Daha önce acentemizden bir danışmanla görüştünüz mü?",
+        type: "choice",
+        options: ["Evet", "Hayır"]
+      },
+      {
+        id: "danisman_adi",
+        text: "Hangi danışmanımızla görüştünüz?",
+        type: "choice",
+        options: ["Enbel", "Fırat", "Seda", "Bahadır"],
+        // Sadece bir onceki soruya "Evet" cevabi verildiyse sorulur.
+        skipIf: (answers) => answers.danisman_gorustu_mu !== "Evet"
+      },
+      { id: "ad_soyad", text: "Ad soyadınızı yazar mısınız?", type: "text" },
+      {
+        id: "yas",
+        text: "Kaç yaşındasınız?",
+        type: "text",
+        validate: yasGecerliMi,
+        validationError: "Yaşınızı sadece rakamla yazar mısınız? (Örn: 35)"
+      },
+      {
+        id: "cinsiyet",
+        text: "Cinsiyetiniz nedir?",
+        type: "choice",
+        options: ["Kadın", "Erkek"]
+      },
+      { id: "meslek", text: "Mesleğiniz nedir?", type: "text" },
+      { id: "il", text: "İkamet ettiğiniz il neresidir?", type: "text" },
+      { id: "ilce", text: "İkamet ettiğiniz ilçe neresidir?", type: "text" }
+    ]
+  },
+
+  bes: {
+    label: "Bireysel Emeklilik Sistemi (BES)",
+    agentNumber: "905326876126", // Enbel - BES doğrudan buraya gider
+    questions: [
+      { id: "ad_soyad", text: "Ad soyadınızı yazar mısınız?", type: "text" },
+      {
+        id: "yas",
+        text: "Kaç yaşındasınız?",
+        type: "text",
+        validate: yasGecerliMi,
+        validationError: "Yaşınızı sadece rakamla yazar mısınız? (Örn: 35)"
+      },
+      {
+        id: "cinsiyet",
+        text: "Cinsiyetiniz nedir?",
+        type: "choice",
+        options: ["Kadın", "Erkek"]
+      },
+      { id: "meslek", text: "Mesleğiniz nedir?", type: "text" },
+      { id: "il", text: "İkamet ettiğiniz il neresidir?", type: "text" },
+      { id: "ilce", text: "İkamet ettiğiniz ilçe neresidir?", type: "text" },
+      {
+        id: "bes_var_mi",
+        text: "Herhangi bir şirkette bireysel emekliliğiniz var mı?",
+        type: "choice",
+        options: ["Evet", "Hayır"]
+      },
+      {
+        id: "bes_sirket",
+        text: "Varsa hangi şirkette? Yoksa 'yok' yazabilirsiniz.",
+        type: "text"
+      },
+      {
+        id: "bes_birikim",
+        text: "Yaklaşık birikim tutarınız nedir? Yoksa 'yok' yazabilirsiniz.",
+        type: "text"
+      }
+    ]
+  },
+
+  malpraktis: {
+    label: "Hekim Sorumluluk Sigortası (Malpraktis)",
+    agentNumber: "905380711711", // Bahadır - elementer branş (Malpraktis)
+    questions: [
+      { id: "ad_soyad", text: "Ad soyadınızı yazar mısınız?", type: "text" },
+      {
+        id: "tc_kimlik",
+        text: "T.C. kimlik numaranızı yazar mısınız?",
+        type: "text",
+        validate: tcKimlikGecerliMi,
+        validationError:
+          "Girdiğiniz T.C. kimlik numarası geçerli görünmüyor. 11 haneli olarak tekrar yazar mısınız?"
+      },
+      {
+        id: "dogum_tarihi",
+        text: "Doğum tarihiniz nedir? (GG.AA.YYYY)",
+        type: "text",
+        validate: tarihGecerliMi,
+        validationError: "Tarihi GG.AA.YYYY formatında yazar mısınız? (Örn: 15.05.1990)"
+      },
+      { id: "meslek", text: "Mesleğiniz nedir?", type: "text" },
+      { id: "uzmanlik_dali", text: "Uzmanlık dalınız nedir?", type: "text" },
+      {
+        id: "adres_tipi",
+        text: "Adres tipi nedir?",
+        type: "choice",
+        options: ["Ev", "İş", "Muayenehane"]
+      },
+      {
+        id: "yillik_hasta_sayisi",
+        text: "Yıllık hasta sayınız yaklaşık kaçtır?",
+        type: "text",
+        validate: pozitifSayiMi,
+        validationError: "Hasta sayısını sadece rakamla yazar mısınız? (Örn: 500)"
+      },
+      {
+        id: "tescil_turu",
+        text: "Tescil türü nedir?",
+        type: "choice",
+        options: ["Diploma Tescil", "Uzmanlık Tescil"]
+      },
+      { id: "tescil_no", text: "Tescil numaranız nedir?", type: "text" },
+      {
+        id: "tescil_tarihi",
+        text: "Tescil tarihiniz nedir? (GG.AA.YYYY)",
+        type: "text",
+        validate: tarihGecerliMi,
+        validationError: "Tarihi GG.AA.YYYY formatında yazar mısınız? (Örn: 15.05.2015)"
+      },
+      {
+        id: "asistan_mi",
+        text: "Asistan mısınız?",
+        type: "choice",
+        options: ["Evet", "Hayır"]
+      },
+      {
+        id: "sigorta_ettiren_turu",
+        text: "Sigorta ettiren türü nedir?",
+        type: "choice",
+        options: ["Serbest Çalışan", "Kurum"]
+      },
+      { id: "saglik_kurumu", text: "Bağlı olduğunuz sağlık kurumu neresidir?", type: "text" },
+      {
+        id: "sadece_idari_gorev_mi",
+        text: "Sadece idari görev mi yapıyorsunuz?",
+        type: "choice",
+        options: ["Evet", "Hayır"]
+      },
+      { id: "il", text: "İkamet ettiğiniz il neresidir?", type: "text" },
+      { id: "ilce", text: "İkamet ettiğiniz ilçe neresidir?", type: "text" }
     ]
   }
 };
