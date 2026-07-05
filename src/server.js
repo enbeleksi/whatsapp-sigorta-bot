@@ -2,13 +2,40 @@ require("dotenv").config();
 const express = require("express");
 const bodyParser = require("body-parser");
 const path = require("path");
+const multer = require("multer");
 const { handleIncoming } = require("./conversationEngine");
-const { sendText } = require("./loggedWhatsapp");
+const { sendText, sendDocument } = require("./loggedWhatsapp");
 const messageLog = require("./messageLog");
 const { getSession } = require("./sessionStore");
 
 const app = express();
 app.use(bodyParser.json());
+
+// Panelden yuklenen dosyalari bellekte tutan gecici depolama (diske yazmiyoruz,
+// direkt WhatsApp'a yukleyip atiyoruz). 16MB'a kadar dosya kabul eder.
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 16 * 1024 * 1024 } });
+
+// --- Ayni WhatsApp mesajinin iki kez islenmesini onleme (webhook tekrari) ---
+// Meta bazen ag sorunlari yuzunden ayni mesaji webhook'a birden fazla kez
+// gonderebilir. Bu durumda ayni cevap, bot tarafindan yanlislikla iki farkli
+// soruya verilmis cevap gibi islenip akisi bozabilir. Her mesajin WhatsApp'in
+// verdigi benzersiz "id"sini tutup, daha once gordugumuz bir id'yi tekrar
+// islemeyerek bunu onluyoruz.
+const islenenMesajIdleri = new Set();
+const islenenMesajSirasi = [];
+const MAX_TUTULAN_MESAJ_ID = 2000;
+
+function mesajDahaOnceIslendiMi(mesajId) {
+  if (!mesajId) return false; // id yoksa (beklenmedik durum) guvenli tarafta kal, isle
+  if (islenenMesajIdleri.has(mesajId)) return true;
+  islenenMesajIdleri.add(mesajId);
+  islenenMesajSirasi.push(mesajId);
+  if (islenenMesajSirasi.length > MAX_TUTULAN_MESAJ_ID) {
+    const enEski = islenenMesajSirasi.shift();
+    islenenMesajIdleri.delete(enEski);
+  }
+  return false;
+}
 
 // --- Basit sifre korumasi (temsilci paneli icin) ---
 function panelAuth(req, res, next) {
@@ -67,6 +94,21 @@ app.post("/api/panel/send", panelAuth, async (req, res) => {
   }
 });
 
+// Panelden musteriye/danismana PDF (poliçe, teklif dosyasi vb.) gonderir.
+// Form-data olarak gelir: "to" (telefon), "caption" (opsiyonel aciklama), "dosya" (PDF).
+app.post("/api/panel/send-document", panelAuth, upload.single("dosya"), async (req, res) => {
+  const { to, caption } = req.body;
+  const dosya = req.file;
+  if (!to || !dosya) return res.status(400).json({ error: "to ve dosya gerekli" });
+  try {
+    await sendDocument(to, dosya.buffer, dosya.mimetype, dosya.originalname, caption || undefined);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Panel dosya gonderme hatasi:", err?.response?.data || err.message);
+    res.status(500).json({ error: "Dosya gonderilemedi" });
+  }
+});
+
 app.post("/api/panel/toggle-pause", panelAuth, (req, res) => {
   const { to, paused } = req.body;
   if (!to) return res.status(400).json({ error: "to gerekli" });
@@ -101,6 +143,11 @@ app.post("/webhook", async (req, res) => {
     const message = value?.messages?.[0];
 
     if (!message) return; // durum bildirimi (okundu/iletildi) vb. olabilir, yoksay
+
+    if (mesajDahaOnceIslendiMi(message.id)) {
+      console.log("Tekrarlanan webhook mesaji atlandi:", message.id);
+      return;
+    }
 
     const from = message.from; // musterinin telefon numarasi
 
