@@ -1,5 +1,5 @@
 const { getSession, resetSession } = require("./sessionStore");
-const { sendText, sendButtons, sendList } = require("./loggedWhatsapp");
+const { sendText, sendButtons, sendList, sendTemplate } = require("./loggedWhatsapp");
 const messageLog = require("./messageLog");
 const flows = require("./flows");
 
@@ -110,7 +110,87 @@ async function startProductFlow(from, session, productKey, { skipIntro = false }
   }
 }
 
-// Bir oturum icin bilgilerin/bildirimin kime gidecegini belirler:
+// Yeni bir konusma baslatir (KVKK oncesi karsilama). QR kodundan gelen hazir
+// mesajlardan biriyle eslesiyor mu diye bakar (orn. "Merhaba, acil dask
+// yaptirmak istiyorum."), eslesirse o urune ozel sicak karsilamayi gonderir.
+// Bu fonksiyon NEW durumunda oldugu kadar, DONE/default durumlarindan sifirlanan
+// bir oturumda da cagrilir - boylece daha once bizimle konusmus/tamamlamis bir
+// musteri QR okutup tekrar geldiginde de dogru QR muamelesini gorur.
+// oncekiIsim: eger musteri daha once bizimle konusup ismini vermisse (DONE'dan
+// sifirlanan bir oturumda), o ismi biliyoruz demektir - varsa dogrudan ismiyle
+// hitap ederek karsilariz.
+async function baslaYeniKonusma(from, session, userText, oncekiIsim) {
+  const matchedKey = PRODUCT_KEYS.find(
+    (key) => flows[key].qrTrigger && flows[key].qrTrigger.test(userText)
+  );
+  const ilkAd = oncekiIsim ? oncekiIsim.trim().split(/\s+/)[0] : null;
+
+  if (matchedKey) {
+    session.pendingProduct = matchedKey;
+    await sendText(from, flows[matchedKey].qrGreeting);
+  } else if (ilkAd) {
+    await sendText(
+      from,
+      `Merhaba ${ilkAd}! 😊 Yeni bir sigorta teklif talebiniz için bizi tekrar tercih ettiğiniz için teşekkür ederiz. Size nasıl yardımcı olabiliriz?`
+    );
+  } else {
+    await sendText(
+      from,
+      "Merhaba! 😊 WE Sigorta ailesine hoş geldiniz! Sizinle tanışmak ve size en uygun teklifi hazırlamak için sabırsızlanıyoruz. 🎉"
+    );
+  }
+
+  await sendChoiceQuestion(from, KVKK_METNI, KVKK_SECENEKLERI);
+  session.state = "KVKK_CONSENT";
+}
+
+// Musteri "ismim Mahmut Yildirim" ya da "adim Mahmut Yildirim" gibi yazarsa,
+// basindaki bu tanitim kelimelerini temizleyip sadece ismi birakir.
+function isimCevabiniTemizle(text) {
+  const temizlenmis = text.replace(
+    /^\s*(benim\s+)?(ismim|adım|adim)\s*[:,]?\s*/i,
+    ""
+  );
+  return temizlenmis.trim() || text.trim();
+}
+
+// Bir danismana/acenteye bildirim gonderir. Iki katmanli calisir:
+// 1) Eger Railway'de AGENT_TEMPLATE_NAME ayarlanmissa (Meta'da onaylanmis bir
+//    sablon), once o sablonu gonderir - sablon mesajlari 24 saat penceresine
+//    tabi DEGILDIR, yani karsi taraf hic yazmamis olsa bile ulasir.
+// 2) Ayrica (sablon olsun olmasin) detayli ozet metnini de normal metin
+//    olarak gondermeyi dener - pencere acik ise bu da ulasir, kapaliysa
+//    sessizce basarisiz olur (sablon zaten temel bilgiyi ilettigi icin sorun
+//    olmaz, panelden detaylara her zaman bakilabilir).
+async function bildirimGonder(numara, urunAdi, musteriAdi, telefon, detayliMetin) {
+  const sablonAdi = process.env.AGENT_TEMPLATE_NAME;
+
+  if (sablonAdi) {
+    const kisaOzet =
+      `🔔 Yeni bir ${urunAdi} talebi geldi.\n\n` +
+      `Müşteri: ${musteriAdi}\n` +
+      `Telefon: ${telefon}\n\n` +
+      `Detaylı bilgileri panelden görüntüleyebilirsiniz.`;
+    try {
+      await sendTemplate(
+        numara,
+        sablonAdi,
+        "tr",
+        { urun_adi: urunAdi, musteri_adi: musteriAdi, telefon: telefon },
+        kisaOzet
+      );
+    } catch (err) {
+      console.error("Sablon bildirimi gonderilemedi:", err?.response?.data || err.message);
+    }
+  }
+
+  try {
+    await sendText(numara, detayliMetin);
+  } catch (err) {
+    console.error("Detayli bildirim mesaji gonderilemedi:", err?.response?.data || err.message);
+  }
+}
+
 // 1) Musteri belirli bir danismanla gorustugunu soyleduyse (flows.js'deki
 //    "advisors" listesiyle eslesirse), o danismana gider.
 // 2) Yoksa, urune ozel bir numara (flows.js icindeki agentNumber) var mi bak.
@@ -188,11 +268,13 @@ async function handleIncoming(from, message) {
         `Musteri: ${session.name || "(isim henuz alinmadi)"}\n` +
         `Telefon: ${from}` +
         (flow ? `\nUrun: ${flow.label}` : "");
-      try {
-        await sendText(agentNumber, notifyMessage);
-      } catch (err) {
-        console.error("Danisman bilgilendirme mesaji gonderilemedi:", err?.response?.data || err.message);
-      }
+      await bildirimGonder(
+        agentNumber,
+        flow ? flow.label : "genel",
+        session.name || "(isim henuz alinmadi)",
+        from,
+        notifyMessage
+      );
     }
     return;
   }
@@ -221,25 +303,7 @@ async function handleIncoming(from, message) {
 
   switch (session.state) {
     case "NEW": {
-      // QR kodundan gelen hazir mesajlardan biriyle eslesiyor mu diye bak
-      // (orn. "Merhaba, acil dask yaptirmak istiyorum."). Eslesirse, KVKK onayi
-      // alindiktan sonra direkt o urunun sorularina baslamak icin kaydediyoruz.
-      const matchedKey = PRODUCT_KEYS.find(
-        (key) => flows[key].qrTrigger && flows[key].qrTrigger.test(userText)
-      );
-
-      if (matchedKey) {
-        session.pendingProduct = matchedKey;
-        await sendText(from, flows[matchedKey].qrGreeting);
-      } else {
-        await sendText(
-          from,
-          "Merhaba! 😊 WE Sigorta ailesine hoş geldiniz! Sizinle tanışmak ve size en uygun teklifi hazırlamak için sabırsızlanıyoruz. 🎉"
-        );
-      }
-
-      await sendChoiceQuestion(from, KVKK_METNI, KVKK_SECENEKLERI);
-      session.state = "KVKK_CONSENT";
+      await baslaYeniKonusma(from, session, userText);
       break;
     }
 
@@ -269,13 +333,13 @@ async function handleIncoming(from, message) {
         await askCurrentQuestion(from, session);
       } else {
         session.state = "ASK_NAME";
-        await sendText(from, "Teşekkürler! 😊 Öncelikle isminizi ve soyisminizi öğrenebilir miyim?");
+        await sendText(from, "Teşekkürler! 😊 Size hitap edebilmek adına isminizi ve soyisminizi öğrenebilir miyim?");
       }
       break;
     }
 
     case "ASK_NAME": {
-      session.name = userText;
+      session.name = isimCevabiniTemizle(userText);
       session.state = "ASK_PRODUCT";
       await sendList(
         from,
@@ -322,15 +386,21 @@ async function handleIncoming(from, message) {
         session.answers[currentQuestion.id] = validOption;
       } else {
         // Serbest metin sorularinda bir dogrulama fonksiyonu tanimliysa
-        // (orn. TC kimlik no, tarih, plaka), formatin uygun olup olmadigini kontrol et.
-        if (currentQuestion.validate && !currentQuestion.validate(userText)) {
+        // (orn. TC kimlik no, tarih, plaka, ya da onceki cevaba bagli bir kontrol
+        // - orn. "daire kati, bina kat sayisindan fazla olamaz"), formatin uygun
+        // olup olmadigini kontrol et. validate(deger, oncekiCevaplar) seklinde
+        // cagrilir, boylece onceki cevaplara da bakabilir.
+        if (currentQuestion.validate && !currentQuestion.validate(userText, session.answers)) {
           const hint =
-            currentQuestion.validationError ||
-            "Bu bilgiyi doğru formatta yazmadınız gibi görünüyor, tekrar dener misiniz?";
-          await sendText(from, `${hint}\n\n${currentText}`);
+            typeof currentQuestion.validationError === "function"
+              ? currentQuestion.validationError(userText, session.answers)
+              : currentQuestion.validationError ||
+                "Bu bilgiyi doğru formatta yazmadınız gibi görünüyor, lütfen tekrar dener misiniz?";
+          await sendText(from, hint);
           break;
         }
-        session.answers[currentQuestion.id] = userText;
+        session.answers[currentQuestion.id] =
+          currentQuestion.id === "ad_soyad" ? isimCevabiniTemizle(userText) : userText;
       }
 
       // QR akisinda ASK_NAME adimi atlandigi icin, "ad_soyad" sorusu
@@ -365,23 +435,19 @@ async function handleIncoming(from, message) {
     }
 
     case "DONE": {
-      // Talep tamamlanmış. Yeni bir talep başlatmak isterse sıfırla ve
-      // KVKK onayını tekrar alalım (yeni bir talep, yeni bir onay).
+      // Talep tamamlanmış. Yeni bir talep icin oturumu sifirlayip, tekrar QR
+      // kontrolu de dahil olmak uzere sifirdan baslatiyoruz (boylece daha once
+      // bizimle konusmus bir musteri de QR okutunca dogru muameleyi gorur).
+      // Sifirlamadan once musterinin ismini yakalayip, biliyorsak ismiyle hitap edelim.
+      const oncekiIsim = session.name;
       resetSession(from);
-      await sendText(
-        from,
-        "Yeni bir sigorta teklifi talebi oluşturmak istediğiniz için tekrar merhaba! 😊"
-      );
-      await sendChoiceQuestion(from, KVKK_METNI, KVKK_SECENEKLERI);
-      getSession(from).state = "KVKK_CONSENT";
+      await baslaYeniKonusma(from, getSession(from), userText, oncekiIsim);
       break;
     }
 
     default: {
       resetSession(from);
-      await sendText(from, "Bir sorun oluştu, baştan başlıyoruz. Merhaba! 😊");
-      await sendChoiceQuestion(from, KVKK_METNI, KVKK_SECENEKLERI);
-      getSession(from).state = "KVKK_CONSENT";
+      await baslaYeniKonusma(from, getSession(from), userText);
     }
   }
 }
@@ -408,28 +474,46 @@ async function finishFlow(from, session) {
     const questionText = resolveText(q, session.answers);
     return `- ${questionText.replace(/\?$/, "")}: ${session.answers[q.id]}`;
   });
+  // Bazi urunlerde (orn. Malpraktis'te hekimlere) soyisim olmadan, sadece isim
+  // + "Hocam" diye hitap ediyoruz. flow.hitapHocam true ise bunu uygula.
+  const hitapIsmi =
+    flow.hitapHocam && session.name
+      ? `${session.name.trim().split(/\s+/)[0]} Hocam`
+      : session.name;
+
   const customerSummary =
-    `Teşekkürler ${session.name}! ${flow.label} talebiniz için gerekli bilgileri aldık. ` +
+    `Teşekkürler ${hitapIsmi}! ${flow.label} talebiniz için gerekli bilgileri aldık. ` +
     `Ekibimiz en kısa sürede sizinle iletişime geçip teklifinizi iletecek. 🙏\n\n` +
     `Özet:\n${summaryLines.join("\n")}`;
 
   await sendText(from, customerSummary);
 
+  // Bazi urunlerde, tum bilgiler alindiktan sonra ek bir tanitim/capraz satis
+  // mesaji gonderilir (flows.js icindeki crossSellMessage alaniyla belirlenir).
+  if (flow.crossSellMessage) {
+    await sendText(from, flow.crossSellMessage);
+  }
+
   // Acenteye/ekibe otomatik ilet.
   const agentNumber = resolveAgentNumber(flow, session);
+  const agentMessage =
+    `\u{1F4CB} Yeni sigorta teklif talebi\n` +
+    `Müşteri: ${session.name}\n` +
+    `Telefon: ${from}\n` +
+    `Ürün: ${flow.label}\n\n` +
+    summaryLines.join("\n");
 
   if (agentNumber) {
-    const agentMessage =
-      `\u{1F4CB} Yeni sigorta teklif talebi\n` +
-      `Müşteri: ${session.name}\n` +
-      `Telefon: ${from}\n` +
-      `Ürün: ${flow.label}\n\n` +
-      summaryLines.join("\n");
-    try {
-      await sendText(agentNumber, agentMessage);
-    } catch (err) {
-      console.error("Acenteye mesaj gonderilemedi:", err?.response?.data || err.message);
-    }
+    await bildirimGonder(agentNumber, flow.label, session.name, from, agentMessage);
+  }
+
+  // Guvenlik agi: hangi danisman/urun sorumlusuna giderse gitsin, her yeni
+  // talep ek olarak her zaman bu sabit numaraya da iletilir (Enbel). Boylece
+  // birincil kisiye bir sekilde ulasmasa bile (orn. sablon henuz kurulmadiysa)
+  // talep gozden kacmaz.
+  const YEDEK_BILDIRIM_NUMARASI = "905326876126";
+  if (agentNumber !== YEDEK_BILDIRIM_NUMARASI) {
+    await bildirimGonder(YEDEK_BILDIRIM_NUMARASI, flow.label, session.name, from, agentMessage);
   }
 }
 
