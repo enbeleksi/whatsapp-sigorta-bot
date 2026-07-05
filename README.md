@@ -5,6 +5,10 @@ Bu bot, WhatsApp uzerinden gelen sigorta urun taleplerini otomatik karsilar:
 2. Secilen urune ozel sorular sirayla sorulur.
 3. Tum cevaplar toplandiginda musteriye ozet gonderilir ve ayni ozet otomatik olarak
    sizin/ekibinizin WhatsApp numarasina iletilir, boylece teklif hazirlamaya hemen baslayabilirsiniz.
+4. Musteri istedigi an "temsilci" yazarak botu durdurup bir insanla gorusme talep edebilir.
+5. Ekibiniz `/panel` adresinden (orn. https://numaraniz.up.railway.app/panel) tum konusmalari
+   gorebilir, botu konusma bazinda duraklatip devam ettirebilir ve musteriye elle mesaj yazabilir.
+   Bu, telefonda WhatsApp Business App'e ihtiyac duymadan, sirf tarayicidan calisir.
 
 Not: Bu bot sadece **bilgi toplama** adimini otomatiklestirir. Teklif hesaplama/hazirlama
 adimi bu surumde manuel kalir (istersen ilerleyen asamada sigorta sirketlerinin teklif
