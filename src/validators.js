@@ -57,11 +57,20 @@ function plakaGecerliMi(value) {
   return /^\d{2}\s?[A-ZÇĞİÖŞÜ]{1,3}\s?\d{2,4}$/.test(v);
 }
 
+// Ruhsat belge seri numarasi: harflerle baslar, rakamlarla devam eder
+// (orn. "AE123456"). Amac kesin resmi format kontrolu degil, tamamen
+// anlamsiz bir girisi (orn. sadece rakam ya da "yok" gibi) elemek.
+function ruhsatSeriNoGecerliMi(value) {
+  const v = (value || "").trim().toUpperCase();
+  return /^[A-ZÇĞİÖŞÜ]{1,3}\s?\d{4,8}$/.test(v);
+}
+
 module.exports = {
   tcKimlikGecerliMi,
   tarihGecerliMi,
   yasGecerliMi,
   pozitifSayiMi,
   yilGecerliMi,
-  plakaGecerliMi
+  plakaGecerliMi,
+  ruhsatSeriNoGecerliMi
 };
