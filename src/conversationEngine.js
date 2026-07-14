@@ -373,6 +373,51 @@ async function handleIncoming(from, message) {
     return;
   }
 
+  // Musteri konusmanin herhangi bir asamasinda "WE Sigorta kimdir/nedir" ya da
+  // "adresiniz nedir" gibi bir soru sorarsa, akisi bozmadan cevap veririz ve
+  // (eger bir soru bekleniyorsa) o soruyu tekrar hatirlatiriz.
+  const SIRKET_ANAHTAR_KELIMELER = [
+    "kimdir",
+    "kimsiniz",
+    "hakkinizda",
+    "hakkinda bilgi",
+    "ne is yapiyorsunuz",
+    "ne isle ugras",
+    "firma hakkinda",
+    "sirket hakkinda"
+  ];
+  const ADRES_ANAHTAR_KELIMELER = [
+    "adresiniz",
+    "neredesiniz",
+    "konumunuz",
+    "nerede bulunuyorsunuz",
+    "ofisiniz nerede",
+    "lokasyonunuz"
+  ];
+
+  const sirketSorusuMu = SIRKET_ANAHTAR_KELIMELER.some((k) => normalizedUserText.includes(k));
+  const adresSorusuMu = ADRES_ANAHTAR_KELIMELER.some((k) => normalizedUserText.includes(k));
+
+  if (sirketSorusuMu || adresSorusuMu) {
+    if (sirketSorusuMu) {
+      await sendText(
+        from,
+        "WE Sigorta, Ekşi Group'un 50 yılı aşkın deneyiminden güç alarak 2020 yılında Eskişehir'de kuruldu. 🏢\n\n" +
+          "İnşaat, otomotiv, akaryakıt, hukuk ve tarım gibi alanlarda yarım asırdır faaliyet gösteren Ekşi Group'un güvenilirlik ve yenilikçilik mirasını sigortacılığa taşıyoruz.\n\n" +
+          "10 yılı aşkın deneyimli, profesyonel ekibimizle hem sigorta hem Bireysel Emeklilik (BES) alanında hızlı, şeffaf ve güvenilir hizmet sunuyoruz. 😊"
+      );
+    }
+    if (adresSorusuMu) {
+      await sendText(from, "Adresimize buradan ulaşabilirsiniz: https://maps.app.goo.gl/TUD5pfWHQijNWetJA 📍");
+    }
+    // Bir soru bekleniyorsa (ASKING asamasindaysak), kaldigi yerden devam
+    // edebilsin diye o soruyu nazikce tekrar hatirlatiyoruz.
+    if (session.state === "ASKING") {
+      await askCurrentQuestion(from, session);
+    }
+    return;
+  }
+
   // Kullanıcı her an "iptal" yazarak sıfırlayabilsin
   if (/^iptal$/i.test(userText)) {
     resetSession(from);
