@@ -137,6 +137,8 @@ const SEHIR_ESPRILERI = {
 
 // Sehir cevabinin icinde (tam eslesme sart degil, "Izmir'den yaziyorum" gibi
 // cumleler de yakalansin diye) bilinen bir sehir adi var mi diye bakar.
+// Bilinmeyen bir sehirde hicbir mesaj gonderilmez (null doner) - zaten sohbetin
+// sonunda ayrica tesekkur ediliyor, burada tekrarlamaya gerek yok.
 function sehirTepkisiUret(cevap) {
   const normalized = sehirIcinNormalize(cevap);
   for (const [sehirAdi, mesaj] of Object.entries(SEHIR_ESPRILERI)) {
@@ -144,7 +146,7 @@ function sehirTepkisiUret(cevap) {
       return mesaj;
     }
   }
-  return "Bizi tercih ettiğiniz için teşekkür ederiz! 😊";
+  return null;
 }
 
 const SEHIR_SORU = {
@@ -574,27 +576,53 @@ module.exports = {
     questions: [
       ...DANISMAN_SORULARI,
       { id: "ad_soyad", text: "İsim ve soyisminizi paylaşır mısınız?", type: "text", sameAsAccountHolder: true },
-      { id: "uzmanlik_dali", text: "Uzmanlık dalınızı belirtir misiniz?", type: "text" },
       {
-        id: "adres_tipi",
-        text: "Adres tipi nedir?",
+        id: "asistan_mi",
+        text: "Asistan mısınız?",
         type: "choice",
-        options: ["Ev", "İş", "Muayenehane"]
+        options: ["Evet", "Hayır"]
+      },
+      {
+        id: "uzman_mi",
+        text: "Uzman mısınız?",
+        type: "choice",
+        options: ["Evet", "Hayır"],
+        // Asistansa zaten uzman degildir, bu soru gereksiz - atlanir.
+        skipIf: (answers) => answers.asistan_mi === "Evet"
+      },
+      {
+        id: "uzmanlik_dali",
+        text: "Uzmanlık dalınızı belirtir misiniz?",
+        type: "text",
+        // Asistan ya da uzmansa uzmanlik dali vardir; ikisi de degilse (tabip) sorulmaz.
+        skipIf: (answers) => !(answers.asistan_mi === "Evet" || answers.uzman_mi === "Evet")
+      },
+      {
+        id: "hasta_bakiyor_mu",
+        text: "Aktif olarak hasta bakıyor musunuz?",
+        type: "choice",
+        options: ["Evet", "Hayır"]
       },
       {
         id: "yillik_hasta_sayisi",
         text: "Yıllık hasta sayınızı yaklaşık olarak söyler misiniz?",
         type: "text",
         validate: pozitifSayiMi,
-        validationError: "Lütfen hasta sayısını sadece rakamla yazar mısınız? (Örn: 500)"
+        validationError: "Lütfen hasta sayısını sadece rakamla yazar mısınız? (Örn: 500)",
+        // Hasta bakmiyorsa (sadece idari gorevliyse) bu soru anlamsiz, atlanir.
+        skipIf: (answers) => answers.hasta_bakiyor_mu === "Hayır"
       },
+      { id: "is_adresi", text: "İş adresinizi (muayenehane/kurum) paylaşır mısınız?", type: "text" },
       {
-        id: "tescil_turu",
-        text: "Tescil türünüz nedir?",
-        type: "choice",
-        options: ["Diploma Tescil", "Uzmanlık Tescil"]
+        id: "tescil_no",
+        // Tescil turu ayrica sorulmuyor, uzman olup olmadigina gore otomatik belirleniyor:
+        // uzmansa "uzmanlık tescil", degilse (asistan ya da tabip) "diploma tescil".
+        text: (answers) =>
+          answers.uzman_mi === "Evet"
+            ? "Uzmanlık tescil numaranızı paylaşır mısınız?"
+            : "Diploma tescil numaranızı paylaşır mısınız?",
+        type: "text"
       },
-      { id: "tescil_no", text: "Tescil numaranızı paylaşır mısınız?", type: "text" },
       {
         id: "tescil_tarihi",
         text: "Tescil tarihinizi belirtir misiniz? (GG.AA.YYYY)",
@@ -603,26 +631,13 @@ module.exports = {
         validationError: "Lütfen tarihi GG.AA.YYYY formatında yazar mısınız? (Örn: 15.05.2015)"
       },
       {
-        id: "asistan_mi",
-        text: "Asistan mısınız?",
-        type: "choice",
-        options: ["Evet", "Hayır"]
-      },
-      {
         id: "sigorta_ettiren_turu",
         text: "Sigorta ettiren türünüz nedir?",
         type: "choice",
-        options: ["Serbest Çalışan", "Kurum"]
+        options: ["Serbest Çalışan", "Kamu Çalışanı"]
       },
       { id: "saglik_kurumu", text: "Bağlı olduğunuz sağlık kurumunu söyler misiniz?", type: "text" },
-      {
-        id: "sadece_idari_gorev_mi",
-        text: "Sadece idari görev mi yapıyorsunuz?",
-        type: "choice",
-        options: ["Evet", "Hayır"]
-      },
       { ...SEHIR_SORU },
-      { ...MESLEK_SORU },
       { ...TC_KIMLIK_SORU }
     ]
   }
