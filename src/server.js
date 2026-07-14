@@ -14,6 +14,7 @@ const { getSession } = sessionStore;
 
 const app = express();
 app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: false })); // /panel/dogrula form gonderimi icin
 
 // Panelden yuklenen dosyalari bellekte tutan gecici depolama (diske yazmiyoruz,
 // direkt WhatsApp'a yukleyip atiyoruz). 16MB'a kadar dosya kabul eder.
@@ -41,31 +42,142 @@ function mesajDahaOnceIslendiMi(mesajId) {
   return false;
 }
 
-// --- Basit sifre korumasi (temsilci paneli icin) ---
-function panelAuth(req, res, next) {
+// --- Sifre + WhatsApp OTP ile iki faktorlu giris (temsilci paneli icin) ---
+// 1. faktor: kullanici adi/sifre (tarayicinin standart Basic Auth kutusu).
+// 2. faktor: WhatsApp'a gonderilen 6 haneli tek kullanimlik kod.
+// Basariyla dogrulanan bir tarayici, 12 saat boyunca tekrar kod girmek zorunda kalmaz.
+const crypto = require("crypto");
+
+const PANEL_2FA_NUMARASI = process.env.PANEL_2FA_NUMARA || "905326876126"; // varsayilan: Enbel
+const OTP_GECERLILIK_MS = 5 * 60 * 1000; // 5 dakika
+const OTURUM_GECERLILIK_MS = 12 * 60 * 60 * 1000; // 12 saat
+
+const otpDenemeleri = new Map(); // denemeToken -> { kod, expiresAt }
+const dogrulanmisOturumlar = new Map(); // oturumToken -> expiresAt
+
+function rastgeleToken() {
+  return crypto.randomBytes(24).toString("hex");
+}
+
+function altiHaneliKod() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+function cookieOku(req, isim) {
+  const header = req.headers.cookie;
+  if (!header) return null;
+  const parca = header.split(";").map((c) => c.trim()).find((c) => c.startsWith(isim + "="));
+  return parca ? decodeURIComponent(parca.split("=").slice(1).join("=")) : null;
+}
+
+function cookieYaz(res, isim, deger, maxAgeMs) {
+  res.append(
+    "Set-Cookie",
+    `${isim}=${encodeURIComponent(deger)}; HttpOnly; Path=/; Max-Age=${Math.floor(maxAgeMs / 1000)}; SameSite=Lax`
+  );
+}
+
+function basicAuthDogrula(req) {
   const auth = req.headers.authorization;
   const expectedUser = process.env.PANEL_USERNAME || "admin";
   const expectedPass = process.env.PANEL_PASSWORD;
+  if (!expectedPass || !auth || !auth.startsWith("Basic ")) return false;
+  const decoded = Buffer.from(auth.split(" ")[1], "base64").toString();
+  const [user, pass] = decoded.split(":");
+  return user === expectedUser && pass === expectedPass;
+}
 
-  if (!expectedPass) {
+// Sadece 1. faktoru (sifre) dogrular - OTP giris sayfasinin kendisi icin kullanilir,
+// aksi halde "OTP sayfasina git" ile "panelAuth" birbirini sonsuz dongude yonlendirir.
+function sadeceSifreGerekli(req, res, next) {
+  if (!process.env.PANEL_PASSWORD) {
     return res.status(500).send("PANEL_PASSWORD ortam degiskeni ayarlanmamis.");
   }
+  if (!basicAuthDogrula(req)) {
+    res.set("WWW-Authenticate", 'Basic realm="Temsilci Paneli"');
+    return res.status(401).send("Giris gerekli.");
+  }
+  next();
+}
 
-  if (!auth || !auth.startsWith("Basic ")) {
+// Tam koruma: hem sifre hem OTP ile dogrulanmis bir oturum gerektirir.
+function panelAuth(req, res, next) {
+  if (!process.env.PANEL_PASSWORD) {
+    return res.status(500).send("PANEL_PASSWORD ortam degiskeni ayarlanmamis.");
+  }
+  if (!basicAuthDogrula(req)) {
     res.set("WWW-Authenticate", 'Basic realm="Temsilci Paneli"');
     return res.status(401).send("Giris gerekli.");
   }
 
-  const decoded = Buffer.from(auth.split(" ")[1], "base64").toString();
-  const [user, pass] = decoded.split(":");
-
-  if (user === expectedUser && pass === expectedPass) {
+  const oturumToken = cookieOku(req, "panel_oturum");
+  const oturumBitis = oturumToken && dogrulanmisOturumlar.get(oturumToken);
+  if (oturumBitis && oturumBitis > Date.now()) {
     return next();
   }
 
-  res.set("WWW-Authenticate", 'Basic realm="Temsilci Paneli"');
-  return res.status(401).send("Hatali kullanici adi veya sifre.");
+  // Sifre dogru ama bu tarayici henuz OTP ile dogrulanmamis - dogrulama sayfasina yonlendir.
+  return res.redirect(302, "/panel/dogrula");
 }
+
+// OTP dogrulama sayfasi: kod uretir, WhatsApp'tan gonderir, girisi bekler.
+app.get("/panel/dogrula", sadeceSifreGerekli, async (req, res) => {
+  let denemeToken = cookieOku(req, "panel_deneme");
+  let deneme = denemeToken && otpDenemeleri.get(denemeToken);
+
+  if (!deneme || deneme.expiresAt < Date.now()) {
+    const kod = altiHaneliKod();
+    denemeToken = rastgeleToken();
+    deneme = { kod, expiresAt: Date.now() + OTP_GECERLILIK_MS };
+    otpDenemeleri.set(denemeToken, deneme);
+    cookieYaz(res, "panel_deneme", denemeToken, OTP_GECERLILIK_MS);
+
+    try {
+      await sendText(
+        PANEL_2FA_NUMARASI,
+        `🔐 WE Sigorta paneline giriş doğrulama kodunuz: ${kod}\n\nBu kod 5 dakika geçerlidir.`
+      );
+    } catch (err) {
+      console.error("2FA kodu gonderilemedi:", err?.response?.data || err.message);
+    }
+  }
+
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="tr"><head><meta charset="utf-8"><title>Doğrulama</title>
+    <style>
+      body { font-family: -apple-system, Segoe UI, Arial, sans-serif; max-width: 360px; margin: 80px auto; text-align: center; color: #333; }
+      input { font-size: 22px; padding: 10px; width: 160px; text-align: center; letter-spacing: 6px; border: 1px solid #ccc; border-radius: 6px; }
+      button { font-size: 15px; padding: 10px 24px; margin-top: 14px; background: #075E54; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
+      .hata { color: #c00; margin-top: 10px; font-size: 13px; }
+    </style>
+    </head><body>
+      <h2>🔐 Giriş Doğrulama</h2>
+      <p>WhatsApp'a gönderilen 6 haneli kodu girin.</p>
+      <form method="POST" action="/panel/dogrula">
+        <input type="text" name="kod" maxlength="6" inputmode="numeric" autofocus required />
+        <br/><button type="submit">Doğrula</button>
+      </form>
+      ${req.query.hata ? '<p class="hata">Kod hatalı veya süresi dolmuş, tekrar deneyin.</p>' : ""}
+    </body></html>
+  `);
+});
+
+app.post("/panel/dogrula", sadeceSifreGerekli, (req, res) => {
+  const denemeToken = cookieOku(req, "panel_deneme");
+  const deneme = denemeToken && otpDenemeleri.get(denemeToken);
+  const girilenKod = (req.body.kod || "").trim();
+
+  if (!deneme || deneme.expiresAt < Date.now() || girilenKod !== deneme.kod) {
+    return res.redirect(302, "/panel/dogrula?hata=1");
+  }
+
+  otpDenemeleri.delete(denemeToken);
+  const oturumToken = rastgeleToken();
+  dogrulanmisOturumlar.set(oturumToken, Date.now() + OTURUM_GECERLILIK_MS);
+  cookieYaz(res, "panel_oturum", oturumToken, OTURUM_GECERLILIK_MS);
+  res.redirect(302, "/panel");
+});
 
 // --- Temsilci paneli sayfasi ve API'leri ---
 app.get("/panel", panelAuth, (req, res) => {
@@ -165,9 +277,16 @@ app.get("/api/panel/stats", panelAuth, (req, res) => {
   leadStore.DURUMLAR.forEach((d) => (durumBazinda[d] = 0));
 
   const simdi = Date.now();
+  const simdiTarih = new Date(simdi);
   const GUN_MS = 24 * 60 * 60 * 1000;
+  const yilBaslangic = new Date(simdiTarih.getFullYear(), 0, 1).getTime();
+  const ceyrekIndex = Math.floor(simdiTarih.getMonth() / 3);
+  const ceyrekBaslangic = new Date(simdiTarih.getFullYear(), ceyrekIndex * 3, 1).getTime();
+
   let son7Gun = 0;
   let son30Gun = 0;
+  let buCeyrek = 0;
+  let yilBasindanBugune = 0;
 
   leads.forEach((lead) => {
     urunBazinda[lead.urun] = (urunBazinda[lead.urun] || 0) + 1;
@@ -178,6 +297,8 @@ app.get("/api/panel/stats", panelAuth, (req, res) => {
     const yas = simdi - lead.olusturulmaZamani;
     if (yas <= 7 * GUN_MS) son7Gun += 1;
     if (yas <= 30 * GUN_MS) son30Gun += 1;
+    if (lead.olusturulmaZamani >= ceyrekBaslangic) buCeyrek += 1;
+    if (lead.olusturulmaZamani >= yilBaslangic) yilBasindanBugune += 1;
   });
 
   const kapananSayisi = (durumBazinda["Olumlu Kapandı"] || 0) + (durumBazinda["Olumsuz Kapandı"] || 0);
@@ -188,6 +309,9 @@ app.get("/api/panel/stats", panelAuth, (req, res) => {
     toplamTalep: leads.length,
     son7Gun,
     son30Gun,
+    buCeyrek,
+    yilBasindanBugune,
+    ceyrekNo: ceyrekIndex + 1,
     urunBazinda,
     danismanBazinda,
     durumBazinda,
@@ -327,6 +451,17 @@ async function baslat() {
 
   setInterval(() => {
     hatirlatmalariKontrolEt().catch((err) => console.error("Hatirlatma kontrolu hatasi:", err));
+  }, HATIRLATMA_KONTROL_SIKLIGI_MS);
+
+  // Suresi gecmis 2FA deneme/oturum kayitlarini temizle (bellek sismesin diye).
+  setInterval(() => {
+    const simdi = Date.now();
+    for (const [token, deneme] of otpDenemeleri) {
+      if (deneme.expiresAt < simdi) otpDenemeleri.delete(token);
+    }
+    for (const [token, bitis] of dogrulanmisOturumlar) {
+      if (bitis < simdi) dogrulanmisOturumlar.delete(token);
+    }
   }, HATIRLATMA_KONTROL_SIKLIGI_MS);
 
   // Railway bir deploy/restart sirasinda once SIGTERM gonderir - bu sinyali

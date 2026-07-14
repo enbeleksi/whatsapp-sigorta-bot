@@ -295,6 +295,8 @@ async function renderStatsView() {
       <div class="statCard"><div class="num">${s.toplamTalep}</div><div class="label">Toplam Talep</div></div>
       <div class="statCard"><div class="num">${s.son7Gun}</div><div class="label">Son 7 Gün</div></div>
       <div class="statCard"><div class="num">${s.son30Gun}</div><div class="label">Son 30 Gün</div></div>
+      <div class="statCard"><div class="num">${s.buCeyrek}</div><div class="label">Bu Çeyrek (Ç${s.ceyrekNo})</div></div>
+      <div class="statCard"><div class="num">${s.yilBasindanBugune}</div><div class="label">Yıl Başından Bugüne</div></div>
       <div class="statCard"><div class="num">${s.donusumOrani === null ? '—' : s.donusumOrani + '%'}</div><div class="label">Olumlu Dönüşüm Oranı</div></div>
     </div>
     <div class="statSection">
