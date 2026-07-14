@@ -44,16 +44,45 @@ function mesajDahaOnceIslendiMi(mesajId) {
 
 // --- Sifre + WhatsApp OTP ile iki faktorlu giris (temsilci paneli icin) ---
 // 1. faktor: kullanici adi/sifre (tarayicinin standart Basic Auth kutusu).
-// 2. faktor: WhatsApp'a gonderilen 6 haneli tek kullanimlik kod.
+// 2. faktor: WhatsApp'a gonderilen 6 haneli tek kullanimlik kod - GIRIS YAPAN
+//    KISININ KENDI numarasina gider (herkes kendi telefonuna kod alir).
 // Basariyla dogrulanan bir tarayici, 12 saat boyunca tekrar kod girmek zorunda kalmaz.
 const crypto = require("crypto");
 
-const PANEL_2FA_NUMARASI = process.env.PANEL_2FA_NUMARA || "905326876126"; // varsayilan: Enbel
+function escapeHtmlSunucu(str) {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+
+// Panele girebilecek kisiler. Her birinin kendi kullanici adi/sifresi ve kendi
+// WhatsApp numarasi var - sifreler Railway'deki ortam degiskenlerinden okunur,
+// numaralar zaten sistemde bilindigi icin burada sabit tanimli. Yeni bir kisi
+// eklemek icin bu listeye bir satir eklemeniz (+ ilgili sifre ortam
+// degiskenini Railway'e tanimlamaniz) yeterlidir.
+const PANEL_KULLANICILARI = [
+  {
+    kullaniciAdi: "enbeleksi",
+    sifre: process.env.PANEL_ENBEL_SIFRE,
+    telefon: "905326876126",
+    ad: "Enbel"
+  },
+  {
+    kullaniciAdi: "bahadireksi",
+    sifre: process.env.PANEL_BAHADIR_SIFRE,
+    telefon: "905380711711",
+    ad: "Bahadır"
+  }
+];
+
 const OTP_GECERLILIK_MS = 5 * 60 * 1000; // 5 dakika
 const OTURUM_GECERLILIK_MS = 12 * 60 * 60 * 1000; // 12 saat
 
-const otpDenemeleri = new Map(); // denemeToken -> { kod, expiresAt }
-const dogrulanmisOturumlar = new Map(); // oturumToken -> expiresAt
+const otpDenemeleri = new Map(); // denemeToken -> { kod, expiresAt, kullaniciAdi }
+const dogrulanmisOturumlar = new Map(); // oturumToken -> { expiresAt, kullaniciAdi }
 
 function rastgeleToken() {
   return crypto.randomBytes(24).toString("hex");
@@ -77,42 +106,61 @@ function cookieYaz(res, isim, deger, maxAgeMs) {
   );
 }
 
-function basicAuthDogrula(req) {
+// Basic Auth basliginda gelen kullanici adi/sifre, tanimli kullanicilardan
+// birine uyuyor mu diye bakar. Uyarsa o kullaniciyi (ve dolayisiyla telefon
+// numarasini) dondurur, uymazsa null doner.
+function basicAuthKullaniciBul(req) {
   const auth = req.headers.authorization;
-  const expectedUser = process.env.PANEL_USERNAME || "admin";
-  const expectedPass = process.env.PANEL_PASSWORD;
-  if (!expectedPass || !auth || !auth.startsWith("Basic ")) return false;
+  if (!auth || !auth.startsWith("Basic ")) return null;
   const decoded = Buffer.from(auth.split(" ")[1], "base64").toString();
-  const [user, pass] = decoded.split(":");
-  return user === expectedUser && pass === expectedPass;
+  const [girilenKullanici, girilenSifre] = decoded.split(":");
+  return (
+    PANEL_KULLANICILARI.find(
+      (k) =>
+        k.sifre &&
+        k.kullaniciAdi === (girilenKullanici || "").toLowerCase() &&
+        k.sifre === girilenSifre
+    ) || null
+  );
+}
+
+function hicSifreTanimliDegilMi() {
+  return PANEL_KULLANICILARI.every((k) => !k.sifre);
 }
 
 // Sadece 1. faktoru (sifre) dogrular - OTP giris sayfasinin kendisi icin kullanilir,
 // aksi halde "OTP sayfasina git" ile "panelAuth" birbirini sonsuz dongude yonlendirir.
+// Dogrulanan kullaniciyi req.panelKullanici'ya yazar (sonraki route bunu kullanir).
 function sadeceSifreGerekli(req, res, next) {
-  if (!process.env.PANEL_PASSWORD) {
-    return res.status(500).send("PANEL_PASSWORD ortam degiskeni ayarlanmamis.");
+  if (hicSifreTanimliDegilMi()) {
+    return res.status(500).send("PANEL_ENBEL_SIFRE / PANEL_BAHADIR_SIFRE ortam degiskenleri ayarlanmamis.");
   }
-  if (!basicAuthDogrula(req)) {
+  const kullanici = basicAuthKullaniciBul(req);
+  if (!kullanici) {
     res.set("WWW-Authenticate", 'Basic realm="Temsilci Paneli"');
     return res.status(401).send("Giris gerekli.");
   }
+  req.panelKullanici = kullanici;
   next();
 }
 
 // Tam koruma: hem sifre hem OTP ile dogrulanmis bir oturum gerektirir.
 function panelAuth(req, res, next) {
-  if (!process.env.PANEL_PASSWORD) {
-    return res.status(500).send("PANEL_PASSWORD ortam degiskeni ayarlanmamis.");
+  if (hicSifreTanimliDegilMi()) {
+    return res.status(500).send("PANEL_ENBEL_SIFRE / PANEL_BAHADIR_SIFRE ortam degiskenleri ayarlanmamis.");
   }
-  if (!basicAuthDogrula(req)) {
+  const kullanici = basicAuthKullaniciBul(req);
+  if (!kullanici) {
     res.set("WWW-Authenticate", 'Basic realm="Temsilci Paneli"');
     return res.status(401).send("Giris gerekli.");
   }
+  req.panelKullanici = kullanici;
 
   const oturumToken = cookieOku(req, "panel_oturum");
-  const oturumBitis = oturumToken && dogrulanmisOturumlar.get(oturumToken);
-  if (oturumBitis && oturumBitis > Date.now()) {
+  const oturum = oturumToken && dogrulanmisOturumlar.get(oturumToken);
+  // Oturumun, GIRIS YAPMAYA CALISAN kullaniciya ait oldugundan da emin oluyoruz
+  // (orn. Bahadır'in cerezi Enbel icin gecerli sayilmasin).
+  if (oturum && oturum.expiresAt > Date.now() && oturum.kullaniciAdi === kullanici.kullaniciAdi) {
     return next();
   }
 
@@ -120,21 +168,23 @@ function panelAuth(req, res, next) {
   return res.redirect(302, "/panel/dogrula");
 }
 
-// OTP dogrulama sayfasi: kod uretir, WhatsApp'tan gonderir, girisi bekler.
+// OTP dogrulama sayfasi: kod uretir, WhatsApp'tan (girisi yapanin KENDI
+// numarasina) gonderir, girisi bekler.
 app.get("/panel/dogrula", sadeceSifreGerekli, async (req, res) => {
+  const kullanici = req.panelKullanici;
   let denemeToken = cookieOku(req, "panel_deneme");
   let deneme = denemeToken && otpDenemeleri.get(denemeToken);
 
-  if (!deneme || deneme.expiresAt < Date.now()) {
+  if (!deneme || deneme.expiresAt < Date.now() || deneme.kullaniciAdi !== kullanici.kullaniciAdi) {
     const kod = altiHaneliKod();
     denemeToken = rastgeleToken();
-    deneme = { kod, expiresAt: Date.now() + OTP_GECERLILIK_MS };
+    deneme = { kod, expiresAt: Date.now() + OTP_GECERLILIK_MS, kullaniciAdi: kullanici.kullaniciAdi };
     otpDenemeleri.set(denemeToken, deneme);
     cookieYaz(res, "panel_deneme", denemeToken, OTP_GECERLILIK_MS);
 
     try {
       await sendText(
-        PANEL_2FA_NUMARASI,
+        kullanici.telefon,
         `🔐 WE Sigorta paneline giriş doğrulama kodunuz: ${kod}\n\nBu kod 5 dakika geçerlidir.`
       );
     } catch (err) {
@@ -153,7 +203,7 @@ app.get("/panel/dogrula", sadeceSifreGerekli, async (req, res) => {
     </style>
     </head><body>
       <h2>🔐 Giriş Doğrulama</h2>
-      <p>WhatsApp'a gönderilen 6 haneli kodu girin.</p>
+      <p>Merhaba ${escapeHtmlSunucu(kullanici.ad)}! WhatsApp'ınıza gönderilen 6 haneli kodu girin.</p>
       <form method="POST" action="/panel/dogrula">
         <input type="text" name="kod" maxlength="6" inputmode="numeric" autofocus required />
         <br/><button type="submit">Doğrula</button>
@@ -164,17 +214,26 @@ app.get("/panel/dogrula", sadeceSifreGerekli, async (req, res) => {
 });
 
 app.post("/panel/dogrula", sadeceSifreGerekli, (req, res) => {
+  const kullanici = req.panelKullanici;
   const denemeToken = cookieOku(req, "panel_deneme");
   const deneme = denemeToken && otpDenemeleri.get(denemeToken);
   const girilenKod = (req.body.kod || "").trim();
 
-  if (!deneme || deneme.expiresAt < Date.now() || girilenKod !== deneme.kod) {
+  if (
+    !deneme ||
+    deneme.expiresAt < Date.now() ||
+    deneme.kullaniciAdi !== kullanici.kullaniciAdi ||
+    girilenKod !== deneme.kod
+  ) {
     return res.redirect(302, "/panel/dogrula?hata=1");
   }
 
   otpDenemeleri.delete(denemeToken);
   const oturumToken = rastgeleToken();
-  dogrulanmisOturumlar.set(oturumToken, Date.now() + OTURUM_GECERLILIK_MS);
+  dogrulanmisOturumlar.set(oturumToken, {
+    expiresAt: Date.now() + OTURUM_GECERLILIK_MS,
+    kullaniciAdi: kullanici.kullaniciAdi
+  });
   cookieYaz(res, "panel_oturum", oturumToken, OTURUM_GECERLILIK_MS);
   res.redirect(302, "/panel");
 });
