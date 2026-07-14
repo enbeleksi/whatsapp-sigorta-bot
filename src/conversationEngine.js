@@ -1,6 +1,7 @@
 const { getSession, resetSession } = require("./sessionStore");
 const { sendText, sendButtons, sendList, sendTemplate } = require("./loggedWhatsapp");
 const messageLog = require("./messageLog");
+const leadStore = require("./leadStore");
 const flows = require("./flows");
 
 const PRODUCT_KEYS = Object.keys(flows);
@@ -199,15 +200,15 @@ const ID_KISA_ETIKET = {
   bes_sirket: "BES Şirket",
   bes_birikim: "BES Birikim",
   uzmanlik_dali: "Uzmanlık Dalı",
-  adres_tipi: "Adres Tipi",
+  uzman_mi: "Uzman mı",
+  is_adresi: "İş Adresi",
+  hasta_bakiyor_mu: "Hasta Bakıyor mu",
   yillik_hasta_sayisi: "Yıllık Hasta Sayısı",
-  tescil_turu: "Tescil Türü",
   tescil_no: "Tescil No",
   tescil_tarihi: "Tescil Tarihi",
   asistan_mi: "Asistan mı",
   sigorta_ettiren_turu: "Sigorta Ettiren",
-  saglik_kurumu: "Sağlık Kurumu",
-  sadece_idari_gorev_mi: "Sadece İdari Görev mi"
+  saglik_kurumu: "Sağlık Kurumu"
 };
 
 // Danismana WhatsApp sablonu icinde (tek bir degiskene sigacak sekilde) gonderilecek
@@ -624,6 +625,38 @@ async function finishFlow(from, session) {
   for (const numara of bildirilecekNumaralar) {
     await bildirimGonder(numara, flow.label, session.name, from, agentMessage, kompaktDetay);
   }
+
+  // Talebi takip sistemine kaydet - danisman panelden durumunu
+  // (Bekliyor/Takipte/Olumlu/Olumsuz) guncelleyebilecek, hatirlatma kurabilecek.
+  const atananDanisman = flow.advisors && flow.advisors.find((a) => a.number === agentNumber);
+  leadStore.yeniLeadOlustur({
+    telefon: from,
+    musteriAdi: session.name,
+    urun: flow.label,
+    danismanAdi: atananDanisman ? atananDanisman.name : null,
+    danismanNumarasi: agentNumber || null,
+    ozet: kompaktDetay
+  });
 }
 
-module.exports = { handleIncoming };
+// Panelden kurulan bir hatirlatmanin zamani geldiginde danismana gonderilir.
+// AGENT_DETAY_TEMPLATE_NAME ayarliysa onu kullanir (24 saat penceresine tabi
+// degil, her zaman ulasir); yoksa duz metin dener (pencere acik olmasi gerekir).
+async function hatirlatmaGonder(numara, metin) {
+  const detayliSablonAdi = process.env.AGENT_DETAY_TEMPLATE_NAME;
+  if (detayliSablonAdi) {
+    try {
+      await sendTemplate(numara, detayliSablonAdi, "tr", { detay: metin }, metin);
+      return;
+    } catch (err) {
+      console.error("Hatırlatma şablonu gönderilemedi:", err?.response?.data || err.message);
+    }
+  }
+  try {
+    await sendText(numara, metin);
+  } catch (err) {
+    console.error("Hatırlatma mesajı gönderilemedi:", err?.response?.data || err.message);
+  }
+}
+
+module.exports = { handleIncoming, hatirlatmaGonder };

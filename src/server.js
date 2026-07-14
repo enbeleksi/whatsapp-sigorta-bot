@@ -3,9 +3,11 @@ const express = require("express");
 const bodyParser = require("body-parser");
 const path = require("path");
 const multer = require("multer");
-const { handleIncoming } = require("./conversationEngine");
+const { handleIncoming, hatirlatmaGonder } = require("./conversationEngine");
+const advisorEngine = require("./advisorEngine");
 const { sendText, sendDocument } = require("./loggedWhatsapp");
 const messageLog = require("./messageLog");
+const leadStore = require("./leadStore");
 const { getSession } = require("./sessionStore");
 
 const app = express();
@@ -117,6 +119,38 @@ app.post("/api/panel/toggle-pause", panelAuth, (req, res) => {
   res.json({ ok: true, paused: session.paused });
 });
 
+// --- Talep takip sistemi (leads) ---
+app.get("/api/panel/leads", panelAuth, (req, res) => {
+  res.json({ leads: leadStore.tumLeadleriGetir(), durumlar: leadStore.DURUMLAR });
+});
+
+app.post("/api/panel/leads/:id/durum", panelAuth, (req, res) => {
+  const { durum } = req.body;
+  if (!durum) return res.status(400).json({ error: "durum gerekli" });
+  const lead = leadStore.durumGuncelle(req.params.id, durum);
+  if (!lead) return res.status(404).json({ error: "Talep bulunamadi ya da gecersiz durum" });
+  res.json({ ok: true, lead });
+});
+
+app.post("/api/panel/leads/:id/not", panelAuth, (req, res) => {
+  const { metin } = req.body;
+  if (!metin) return res.status(400).json({ error: "metin gerekli" });
+  const lead = leadStore.notEkle(req.params.id, metin);
+  if (!lead) return res.status(404).json({ error: "Talep bulunamadi" });
+  res.json({ ok: true, lead });
+});
+
+// Panelden bir hatirlatma kurar. zaman: ISO tarih-saat string'i (orn. "2026-07-16T09:00").
+app.post("/api/panel/leads/:id/hatirlatma", panelAuth, (req, res) => {
+  const { zaman, not } = req.body;
+  if (!zaman) return res.status(400).json({ error: "zaman gerekli" });
+  const zamanMs = new Date(zaman).getTime();
+  if (Number.isNaN(zamanMs)) return res.status(400).json({ error: "Gecersiz tarih/saat" });
+  const lead = leadStore.hatirlatmaKur(req.params.id, zamanMs, not);
+  if (!lead) return res.status(404).json({ error: "Talep bulunamadi" });
+  res.json({ ok: true, lead });
+});
+
 // 1) Meta webhook DOGRULAMA (GET) - Meta App panelinde webhook'u kaydederken cagirilir
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
@@ -172,7 +206,11 @@ app.post("/webhook", async (req, res) => {
     }
 
     if (parsed) {
-      await handleIncoming(from, parsed);
+      if (advisorEngine.isDanisman(from)) {
+        await advisorEngine.handleAdvisorMessage(from, parsed);
+      } else {
+        await handleIncoming(from, parsed);
+      }
     }
   } catch (err) {
     console.error("Webhook isleme hatasi:", err?.response?.data || err.message);
@@ -187,3 +225,36 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Sunucu ${PORT} portunda calisiyor.`);
 });
+
+// --- Hatirlatma zamanlayicisi ---
+// Her dakika, zamani gelmis (ve henuz gonderilmemis) hatirlatmalari kontrol
+// edip ilgili danismana WhatsApp mesaji olarak gonderir.
+const HATIRLATMA_KONTROL_SIKLIGI_MS = 60 * 1000;
+
+async function hatirlatmalariKontrolEt() {
+  const zamaniGelenler = leadStore.zamaniGelenHatirlatmalar();
+  for (const lead of zamaniGelenler) {
+    if (!lead.danismanNumarasi) {
+      leadStore.hatirlatmaGonderildiIsaretle(lead.id);
+      continue;
+    }
+    const mesaj =
+      `⏰ Hatırlatma!\n\n` +
+      `Müşteri: ${lead.musteriAdi}\n` +
+      `Ürün: ${lead.urun}\n` +
+      `Telefon: ${lead.telefon}\n\n` +
+      (lead.hatirlatma.not ? `Not: ${lead.hatirlatma.not}` : "Bu müşteriyle ilgilenme zamanı geldi.");
+    try {
+      await hatirlatmaGonder(lead.danismanNumarasi, mesaj);
+      console.log("Hatirlatma gonderildi:", lead.id, lead.danismanNumarasi);
+    } catch (err) {
+      console.error("Hatirlatma gonderilirken hata:", err?.response?.data || err.message);
+    } finally {
+      leadStore.hatirlatmaGonderildiIsaretle(lead.id);
+    }
+  }
+}
+
+setInterval(() => {
+  hatirlatmalariKontrolEt().catch((err) => console.error("Hatirlatma kontrolu hatasi:", err));
+}, HATIRLATMA_KONTROL_SIKLIGI_MS);
