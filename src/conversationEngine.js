@@ -168,18 +168,85 @@ function isimCevabiniTemizle(text) {
   return trimmed;
 }
 
-// Bir danismana/acenteye bildirim gonderir. Iki katmanli calisir:
-// 1) Eger Railway'de AGENT_TEMPLATE_NAME ayarlanmissa (Meta'da onaylanmis bir
-//    sablon), once o sablonu gonderir - sablon mesajlari 24 saat penceresine
-//    tabi DEGILDIR, yani karsi taraf hic yazmamis olsa bile ulasir.
-// 2) Ayrica (sablon olsun olmasin) detayli ozet metnini de normal metin
-//    olarak gondermeyi dener - pencere acik ise bu da ulasir, kapaliysa
-//    sessizce basarisiz olur (sablon zaten temel bilgiyi ilettigi icin sorun
-//    olmaz, panelden detaylara her zaman bakilabilir).
-async function bildirimGonder(numara, urunAdi, musteriAdi, telefon, detayliMetin) {
-  const sablonAdi = process.env.AGENT_TEMPLATE_NAME;
+// Acente bildirimlerinde soru metni yerine kullanilan kisa, okunakli etiketler.
+// Tam soru cumlesi ("Binanın toplam kaç kattan oluştuğunu belirtir misiniz?")
+// yerine kisa etiket ("Kat Sayısı") kullanmak, tek bir sablon degiskenine
+// sigdirmamiz gereken metni (1024 karakter siniri var) ciddi olcude kisaltir.
+const ID_KISA_ETIKET = {
+  danisman_gorustu_mu: "Danışmanla Görüştü mü",
+  danisman_adi: "Danışman",
+  ad_soyad: "İsim Soyisim",
+  mulkiyet_durumu: "Mülkiyet",
+  police_kimin_uzerine: "Poliçe Kimin Üzerine",
+  daini_murtehin: "Dain-i Mürtehin",
+  adres: "Adres",
+  yuz_olcumu: "Yüz Ölçümü (m²)",
+  insaat_yili: "İnşaat Yılı",
+  bina_kat_sayisi: "Bina Kat Sayısı",
+  dairenin_bulundugu_kat: "Daire Katı",
+  meslek: "Meslek",
+  tc_kimlik: "TC",
+  plaka: "Plaka",
+  ruhsat_seri_no: "Ruhsat Seri No",
+  sehir: "Şehir",
+  kimin_icin: "Kimin İçin",
+  dogum_tarihi: "Doğum Tarihi",
+  cinsiyet: "Cinsiyet",
+  boy_kilo: "Boy/Kilo",
+  il_ilce: "İl/İlçe",
+  yas: "Yaş",
+  bes_var_mi: "BES Var mı",
+  bes_sirket: "BES Şirket",
+  bes_birikim: "BES Birikim",
+  uzmanlik_dali: "Uzmanlık Dalı",
+  adres_tipi: "Adres Tipi",
+  yillik_hasta_sayisi: "Yıllık Hasta Sayısı",
+  tescil_turu: "Tescil Türü",
+  tescil_no: "Tescil No",
+  tescil_tarihi: "Tescil Tarihi",
+  asistan_mi: "Asistan mı",
+  sigorta_ettiren_turu: "Sigorta Ettiren",
+  saglik_kurumu: "Sağlık Kurumu",
+  sadece_idari_gorev_mi: "Sadece İdari Görev mi"
+};
 
-  if (sablonAdi) {
+// Danismana WhatsApp sablonu icinde (tek bir degiskene sigacak sekilde) gonderilecek
+// kompakt ozet metnini olusturur. Satir arasi degil " • " ile ayrilir, cunku sablon
+// degiskenlerinde alt satira gecme karakteri sorun cikarabiliyor.
+function kompaktDetayOlustur(flow, session, telefon) {
+  const askedQuestions = flow.questions.filter((q) => !(q.skipIf && q.skipIf(session.answers)));
+  const alanlar = askedQuestions.map((q) => {
+    const etiket = ID_KISA_ETIKET[q.id] || q.id;
+    return `${etiket}: ${session.answers[q.id]}`;
+  });
+  return (
+    `${flow.label} • Müşteri: ${session.name} • Telefon: ${telefon} • ` + alanlar.join(" • ")
+  );
+}
+
+// Bir danismana/acenteye bildirim gonderir. Uc katmanli calisir:
+// 1) Eger Railway'de AGENT_DETAY_TEMPLATE_NAME ayarlanmissa (tek degiskenli,
+//    tum detaylari iceren onaylanmis bir sablon), once onu dener - basariliysa
+//    danisman TUM bilgiyi WhatsApp'ta gorur, panele bakmasina gerek kalmaz.
+// 2) O basarisiz olursa ya da ayarlanmamissa, AGENT_TEMPLATE_NAME (kisa,
+//    3 degiskenli eski sablon) varsa onu dener - sadece temel bilgiyi iletir.
+// 3) Ayrica (sablonlar basarili olsun olmasin) detayli metni normal metin
+//    olarak da gondermeyi dener - pencere acik ise ekstra bir kopya daha ulasir.
+async function bildirimGonder(numara, urunAdi, musteriAdi, telefon, detayliMetin, kompaktDetay) {
+  const detayliSablonAdi = process.env.AGENT_DETAY_TEMPLATE_NAME;
+  const kisaSablonAdi = process.env.AGENT_TEMPLATE_NAME;
+  let detayliSablonBasarili = false;
+
+  if (detayliSablonAdi && kompaktDetay) {
+    try {
+      await sendTemplate(numara, detayliSablonAdi, "tr", { detay: kompaktDetay }, detayliMetin);
+      detayliSablonBasarili = true;
+    } catch (err) {
+      console.error("Detayli sablon bildirimi gonderilemedi:", err?.response?.data || err.message);
+    }
+  }
+
+  if (!detayliSablonBasarili && kisaSablonAdi) {
     const kisaOzet =
       `🔔 Yeni bir ${urunAdi} talebi geldi.\n\n` +
       `Müşteri: ${musteriAdi}\n` +
@@ -188,7 +255,7 @@ async function bildirimGonder(numara, urunAdi, musteriAdi, telefon, detayliMetin
     try {
       await sendTemplate(
         numara,
-        sablonAdi,
+        kisaSablonAdi,
         "tr",
         { urun_adi: urunAdi, musteri_adi: musteriAdi, telefon: telefon },
         kisaOzet
@@ -426,6 +493,17 @@ async function handleIncoming(from, message) {
           currentQuestion.id === "ad_soyad" ? isimCevabiniTemizle(userText) : userText;
       }
 
+      // Bazi sorularda cevaba gore kisa, sicak bir tepki metni gonderilir (orn.
+      // sehir sorusunda hangi sehirden yazdigina gore bir selam mesaji).
+      // question.tepki tanimliysa ve bir mesaj donduruyorsa, sonraki soruya
+      // gecmeden once ayri bir mesaj olarak gonderilir.
+      if (currentQuestion.tepki) {
+        const tepkiMesaji = currentQuestion.tepki(session.answers[currentQuestion.id]);
+        if (tepkiMesaji) {
+          await sendText(from, tepkiMesaji);
+        }
+      }
+
       // QR akisinda ASK_NAME adimi atlandigi icin, "ad_soyad" sorusu
       // cevaplanınca session.name'i de dolduruyoruz (ozet/panel icin).
       if (currentQuestion.id === "ad_soyad" && !session.name) {
@@ -525,9 +603,10 @@ async function finishFlow(from, session) {
     `Telefon: ${from}\n` +
     `Ürün: ${flow.label}\n\n` +
     summaryLines.join("\n");
+  const kompaktDetay = kompaktDetayOlustur(flow, session, from);
 
   if (agentNumber) {
-    await bildirimGonder(agentNumber, flow.label, session.name, from, agentMessage);
+    await bildirimGonder(agentNumber, flow.label, session.name, from, agentMessage, kompaktDetay);
   }
 
   // Guvenlik agi: hangi danisman/urun sorumlusuna giderse gitsin, her yeni
@@ -536,7 +615,7 @@ async function finishFlow(from, session) {
   // talep gozden kacmaz.
   const YEDEK_BILDIRIM_NUMARASI = "905326876126";
   if (agentNumber !== YEDEK_BILDIRIM_NUMARASI) {
-    await bildirimGonder(YEDEK_BILDIRIM_NUMARASI, flow.label, session.name, from, agentMessage);
+    await bildirimGonder(YEDEK_BILDIRIM_NUMARASI, flow.label, session.name, from, agentMessage, kompaktDetay);
   }
 }
 

@@ -34,19 +34,19 @@ const {
 
 const MESLEK_SORU = {
   id: "meslek",
-  text: "Mesleğinizi paylaşır mısınız? Bazı mesleklerde indirim uygulanabildiği için bu bilgiyi soruyoruz.",
+  text: "Mesleğinizi paylaşır mısınız? 💼 Bazı meslek gruplarına özel indirimler uygulayabiliyoruz, bu yüzden soruyoruz 😊",
   type: "text"
 };
 
 const MESLEK_SORU_SON = {
   id: "meslek",
-  text: "Son olarak mesleğinizi paylaşır mısınız? Bazı mesleklerde indirim uygulanabildiği için bu bilgiyi soruyoruz.",
+  text: "Son olarak mesleğinizi paylaşır mısınız? 💼 Bazı meslek gruplarına özel indirimler uygulayabiliyoruz, bu yüzden soruyoruz 😊",
   type: "text"
 };
 
 const MESLEK_SORU_UCUNCU_SAHIS = {
   id: "meslek",
-  text: "Sigortalanacak kişinin mesleğini söyler misiniz? Bazı mesleklerde indirim uygulanabildiği için bu bilgiyi soruyoruz.",
+  text: "Sigortalanacak kişinin mesleğini söyler misiniz? 💼 Bazı meslek gruplarına özel indirimler uygulayabiliyoruz, bu yüzden soruyoruz 😊",
   type: "text"
 };
 
@@ -82,10 +82,76 @@ const RUHSAT_SERI_NO_SORU = {
     "Lütfen ruhsat seri numarasını doğru formatta yazar mısınız? Harflerle başlayıp rakamlarla devam etmesi gerekiyor. (Örn: AE123456)"
 };
 
+// Sehir cevabinda Turkce karakter farkliliklarini (ı/i, ş/s, ğ/g, ü/u, ö/o, ç/c)
+// tolere ederek kucuk harfe cevirir - conversationEngine.js'deki normalizeTr ile
+// ayni mantik, ama dongusel require olusmasin diye burada ayrica tanimlandi.
+function sehirIcinNormalize(str) {
+  return (str || "")
+    .replace(/İ/g, "i")
+    .replace(/I/g, "i")
+    .replace(/ı/g, "i")
+    .toLowerCase()
+    .replace(/ğ/g, "g")
+    .replace(/ü/g, "u")
+    .replace(/ş/g, "s")
+    .replace(/ö/g, "o")
+    .replace(/ç/g, "c");
+}
+
+// Sehir cevabina gore kisa, sicak bir selam mesaji. Anahtarlar normalize
+// edilmis (kucuk harf, Turkce karaktersiz) sehir isimleridir.
+const SEHIR_ESPRILERI = {
+  istanbul: "İki kıtayı birleştiren muhteşem İstanbul'a selam olsun! 🌉",
+  ankara: "Başkentimiz Ankara'ya selam olsun! 🏛️",
+  izmir: "Güzel İzmir'e selam olsun! 🌊",
+  bursa: "Yeşil Bursa'ya selam olsun! 🍃",
+  antalya: "Güneşli Antalya'ya selam olsun! ☀️",
+  eskisehir: "Türkiye'nin en modern şehri Eskişehir'e selam olsun! 🎓",
+  adana: "Sıcacık Adana'ya selam olsun! 🌶️",
+  konya: "Tarihi Konya'ya selam olsun! 🕌",
+  gaziantep: "Lezzetleriyle ünlü Gaziantep'e selam olsun! 🍽️",
+  mersin: "Akdeniz'in incisi Mersin'e selam olsun! 🌴",
+  kayseri: "Girişimci ruhlu Kayseri'ye selam olsun! 💼",
+  trabzon: "Yeşilin ve denizin buluştuğu Trabzon'a selam olsun! ⛰️",
+  samsun: "Karadeniz'in incisi Samsun'a selam olsun! 🌊",
+  denizli: "Horozuyla ünlü Denizli'ye selam olsun! 🐓",
+  sanliurfa: "Balıklıgöl'ün şehri Şanlıurfa'ya selam olsun! 🐟",
+  urfa: "Balıklıgöl'ün şehri Şanlıurfa'ya selam olsun! 🐟",
+  malatya: "Kayısının başkenti Malatya'ya selam olsun! 🍑",
+  van: "Gölüyle meşhur Van'a selam olsun! 🏞️",
+  diyarbakir: "Tarihi surlarıyla Diyarbakır'a selam olsun! 🏰",
+  sakarya: "Sakarya'ya selam olsun! 🌳",
+  mugla: "Cennet koylarıyla Muğla'ya selam olsun! 🏖️",
+  kocaeli: "Sanayinin kalbi Kocaeli'ye selam olsun! 🏭",
+  izmit: "Sanayinin kalbi Kocaeli'ye selam olsun! 🏭",
+  balikesir: "Balıkesir'e selam olsun! 🌾",
+  manisa: "Üzümüyle meşhur Manisa'ya selam olsun! 🍇",
+  aydin: "İnciriyle meşhur Aydın'a selam olsun! 🌿",
+  tekirdag: "Tekirdağ'a selam olsun! 🍇",
+  canakkale: "Destansı Çanakkale'ye selam olsun! 🌊",
+  erzurum: "Kar beyazı Erzurum'a selam olsun! ❄️",
+  sivas: "Tarihi Sivas'a selam olsun! 🏛️",
+  elazig: "Elazığ'a selam olsun! 🍒",
+  rize: "Çayıyla ünlü Rize'ye selam olsun! 🍵"
+};
+
+// Sehir cevabinin icinde (tam eslesme sart degil, "Izmir'den yaziyorum" gibi
+// cumleler de yakalansin diye) bilinen bir sehir adi var mi diye bakar.
+function sehirTepkisiUret(cevap) {
+  const normalized = sehirIcinNormalize(cevap);
+  for (const [sehirAdi, mesaj] of Object.entries(SEHIR_ESPRILERI)) {
+    if (normalized.includes(sehirAdi)) {
+      return mesaj;
+    }
+  }
+  return "Bizi tercih ettiğiniz için teşekkür ederiz! 😊";
+}
+
 const SEHIR_SORU = {
   id: "sehir",
   text: "Hangi şehirden bize ulaştığınızı öğrenebilir miyim?",
-  type: "text"
+  type: "text",
+  tepki: sehirTepkisiUret
 };
 
 // Bina kat sayisi + dairenin bulundugu kat, DASK ve Konut'ta ortak kullanilan
@@ -131,16 +197,47 @@ const INSAAT_YILI_SORU = {
   }
 };
 
+// Tum urunlerde ortak kullanilan danisman listesi. Musteri daha once bir
+// danismanla gorustuyse, toplanan bilgiler urunun varsayilan sorumlusuna degil,
+// o danismanin numarasina gider. Ekip degistikce bu listeyi guncelleyebilirsiniz.
+const DANISMANLAR = [
+  { name: "Enbel", number: "905326876126" },
+  { name: "Fırat", number: "905527902616" },
+  { name: "Seda", number: "905324176026" },
+  { name: "Bahadır", number: "905380711711" }
+];
+
+// Tum urunlerin basinda sorulan, daha once bir danismanla gorusulup
+// gorusulmedigini soran iki soru. Ikinci soru sadece "Evet" cevabinda sorulur.
+const DANISMAN_SORULARI = [
+  {
+    id: "danisman_gorustu_mu",
+    text: "Daha önce acentemiz bünyesindeki danışmanlarımızdan biriyle görüşme fırsatınız oldu mu?",
+    type: "choice",
+    options: ["Evet", "Hayır"]
+  },
+  {
+    id: "danisman_adi",
+    text: "Hangi danışmanımızla görüşme fırsatınız oldu?",
+    type: "choice",
+    options: ["Enbel", "Fırat", "Seda", "Bahadır"],
+    // Sadece bir onceki soruya "Evet" cevabi verildiyse sorulur.
+    skipIf: (answers) => answers.danisman_gorustu_mu !== "Evet"
+  }
+];
+
 module.exports = {
   dask: {
     label: "DASK",
     agentNumber: "905380711711", // Bahadır - elementer branş (DASK)
+    advisors: DANISMANLAR,
     // QR kodundan gelen hazır mesaj bu metni içeriyorsa, bot direkt bu ürüne geçer
     // ve aşağıdaki sıcak karşılama mesajıyla başlar (ürün seçim listesi atlanır).
     qrTrigger: /dask/i,
     qrGreeting:
       "Merhaba! 😊 Yeni eviniz hayırlı olsun, içinde huzur dolu günler geçirmenizi dileriz! 🏠💛 DASK poliçenizi hemen hazırlayabilmemiz için birkaç bilgi alalım, olur mu?",
     questions: [
+      ...DANISMAN_SORULARI,
       { id: "ad_soyad", text: "İsim ve soyisminizi paylaşır mısınız?", type: "text", sameAsAccountHolder: true },
       {
         id: "mulkiyet_durumu",
@@ -183,7 +280,9 @@ module.exports = {
   konut: {
     label: "Konut Sigortası",
     agentNumber: "905380711711", // Bahadır - elementer branş (Konut)
+    advisors: DANISMANLAR,
     questions: [
+      ...DANISMAN_SORULARI,
       { id: "ad_soyad", text: "İsim ve soyisminizi paylaşır mısınız?", type: "text", sameAsAccountHolder: true },
       // DASK'in aksine Konut Sigortasi mutlaka ev sahibinin uzerine olmak
       // zorunda degil - kiraci da kendi uzerine yaptirabilir. Bu yuzden
@@ -231,10 +330,12 @@ module.exports = {
     intro:
       "Trafik Sigortası, bir kaza durumunda karşı tarafa vereceğiniz zararları güvence altına alan, yasal olarak zorunlu bir sigortadır. Teklifinizi hazırlamak için birkaç bilgi alalım. 🚗",
     agentNumber: "905380711711", // Bahadır - elementer branş (Trafik)
+    advisors: DANISMANLAR,
     qrTrigger: /trafik/i,
     qrGreeting:
       "Merhaba! 😊 Yeni aracınız hayırlı olsun, güle güle kullanın! 🚗✨ Trafik sigortanızı en kısa sürede hazırlayabilmemiz için birkaç küçük bilgiye ihtiyacımız olacak, hemen başlayalım mı?",
     questions: [
+      ...DANISMAN_SORULARI,
       { id: "ad_soyad", text: "İsim ve soyisminizi paylaşır mısınız?", type: "text", sameAsAccountHolder: true },
       {
         id: "plaka",
@@ -255,7 +356,9 @@ module.exports = {
     intro:
       "Kasko, aracınızı kaza, hırsızlık, yangın gibi risklere karşı güvence altına alır. Teklifinizi hazırlamak için birkaç bilgi alalım. 🚗",
     agentNumber: "905380711711", // Bahadır - elementer branş (Kasko)
+    advisors: DANISMANLAR,
     questions: [
+      ...DANISMAN_SORULARI,
       { id: "ad_soyad", text: "İsim ve soyisminizi paylaşır mısınız?", type: "text", sameAsAccountHolder: true },
       {
         id: "plaka",
@@ -274,7 +377,9 @@ module.exports = {
   ozel_saglik: {
     label: "Özel Sağlık Sigortası",
     agentNumber: "905380711711", // Bahadır - elementer branş (Özel Sağlık)
+    advisors: DANISMANLAR,
     questions: [
+      ...DANISMAN_SORULARI,
       {
         id: "kimin_icin",
         text: "Kimin için sigorta yaptırmak istiyorsunuz?",
@@ -318,7 +423,9 @@ module.exports = {
     label: "TSS (Tamamlayıcı Sağlık Sigortası)",
     menuLabel: "TSS (Tamamlayıcı Sig.)", // Urun secim listesinde WhatsApp'in 24 karakter siniri var
     agentNumber: "905380711711", // Bahadır - elementer branş (TSS)
+    advisors: DANISMANLAR,
     questions: [
+      ...DANISMAN_SORULARI,
       {
         id: "kimin_icin",
         text: "Kimin için sigorta yaptırmak istiyorsunuz?",
@@ -368,28 +475,9 @@ module.exports = {
       "Merhaba! 😊 Hayat sigortası ile ilgilendiğiniz için teşekkür ederiz. Size en uygun teklifi hazırlayabilmemiz için birkaç bilgi alalım, olur mu?",
     // Bu urunle ilgilenen danismanlar. Musteri daha once bir danismanla
     // gorustuyse, toplanan bilgiler o danismanin numarasina gider.
-    // Ekip degistikce bu listeyi guncelleyebilirsiniz (isim + WhatsApp numarasi).
-    advisors: [
-      { name: "Enbel", number: "905326876126" },
-      { name: "Fırat", number: "905527902616" },
-      { name: "Seda", number: "905324176026" },
-      { name: "Bahadır", number: "905380711711" }
-    ],
+    advisors: DANISMANLAR,
     questions: [
-      {
-        id: "danisman_gorustu_mu",
-        text: "Daha önce acentemizden bir danışmanla görüştünüz mü?",
-        type: "choice",
-        options: ["Evet", "Hayır"]
-      },
-      {
-        id: "danisman_adi",
-        text: "Hangi danışmanımızla görüştünüz?",
-        type: "choice",
-        options: ["Enbel", "Fırat", "Seda", "Bahadır"],
-        // Sadece bir onceki soruya "Evet" cevabi verildiyse sorulur.
-        skipIf: (answers) => answers.danisman_gorustu_mu !== "Evet"
-      },
+      ...DANISMAN_SORULARI,
       { id: "ad_soyad", text: "İsim ve soyisminizi paylaşır mısınız?", type: "text", sameAsAccountHolder: true },
       {
         id: "yas",
@@ -411,7 +499,9 @@ module.exports = {
     label: "Bireysel Emeklilik Sistemi (BES)",
     menuLabel: "Bireysel Emeklilik(BES)", // Urun secim listesinde WhatsApp'in 24 karakter siniri var
     agentNumber: "905326876126", // Enbel - BES doğrudan buraya gider
+    advisors: DANISMANLAR,
     questions: [
+      ...DANISMAN_SORULARI,
       { id: "ad_soyad", text: "İsim ve soyisminizi paylaşır mısınız?", type: "text", sameAsAccountHolder: true },
       {
         id: "yas",
@@ -458,7 +548,9 @@ module.exports = {
       "Prim İadeli Hayat Sigortamız ile ödediğiniz primler ciddi bir vergi avantajı sağlıyor, üstelik " +
       "vade sonunda bir talebiniz olmazsa ödediğiniz primler aynen size geri iade ediliyor. 💰\n\n" +
       "Detaylı bilgi ve teklif için: https://www.wesigorta.com.tr/primiadeli/",
+    advisors: DANISMANLAR,
     questions: [
+      ...DANISMAN_SORULARI,
       { id: "ad_soyad", text: "İsim ve soyisminizi paylaşır mısınız?", type: "text", sameAsAccountHolder: true },
       { id: "uzmanlik_dali", text: "Uzmanlık dalınızı belirtir misiniz?", type: "text" },
       {
