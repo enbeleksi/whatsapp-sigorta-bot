@@ -605,17 +605,23 @@ async function finishFlow(from, session) {
     summaryLines.join("\n");
   const kompaktDetay = kompaktDetayOlustur(flow, session, from);
 
-  if (agentNumber) {
-    await bildirimGonder(agentNumber, flow.label, session.name, from, agentMessage, kompaktDetay);
+  // Guvenlik agi: hangi danisman secilirse secilsin (musteri farkli bir
+  // danismanla gorustugunu soylese bile), asagidaki sabit numaralar her zaman
+  // ayrica bilgilendirilir - boylece hicbir talep gozden kacmaz:
+  // - Enbel: her urun icin her zaman.
+  // - Bahadır: sadece elementer brans urunlerinde (flow.agentNumber onun
+  //   numarasiysa) - yani DASK, Konut, Trafik, Kasko, Ozel Saglik, TSS, Malpraktis.
+  const ENBEL_NUMARASI = "905326876126";
+  const BAHADIR_NUMARASI = "905380711711";
+  const bildirilecekNumaralar = new Set();
+  if (agentNumber) bildirilecekNumaralar.add(agentNumber);
+  bildirilecekNumaralar.add(ENBEL_NUMARASI);
+  if (flow.agentNumber === BAHADIR_NUMARASI) {
+    bildirilecekNumaralar.add(BAHADIR_NUMARASI);
   }
 
-  // Guvenlik agi: hangi danisman/urun sorumlusuna giderse gitsin, her yeni
-  // talep ek olarak her zaman bu sabit numaraya da iletilir (Enbel). Boylece
-  // birincil kisiye bir sekilde ulasmasa bile (orn. sablon henuz kurulmadiysa)
-  // talep gozden kacmaz.
-  const YEDEK_BILDIRIM_NUMARASI = "905326876126";
-  if (agentNumber !== YEDEK_BILDIRIM_NUMARASI) {
-    await bildirimGonder(YEDEK_BILDIRIM_NUMARASI, flow.label, session.name, from, agentMessage, kompaktDetay);
+  for (const numara of bildirilecekNumaralar) {
+    await bildirimGonder(numara, flow.label, session.name, from, agentMessage, kompaktDetay);
   }
 }
 
