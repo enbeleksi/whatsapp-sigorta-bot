@@ -198,7 +198,7 @@ app.get("/panel/dogrula", sadeceSifreGerekli, async (req, res) => {
     <style>
       body { font-family: -apple-system, Segoe UI, Arial, sans-serif; max-width: 360px; margin: 80px auto; text-align: center; color: #333; }
       input { font-size: 22px; padding: 10px; width: 160px; text-align: center; letter-spacing: 6px; border: 1px solid #ccc; border-radius: 6px; }
-      button { font-size: 15px; padding: 10px 24px; margin-top: 14px; background: #075E54; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
+      button { font-size: 15px; padding: 10px 24px; margin-top: 14px; background: #16324F; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
       .hata { color: #c00; margin-top: 10px; font-size: 13px; }
     </style>
     </head><body>
