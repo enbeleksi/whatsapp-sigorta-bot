@@ -1,11 +1,13 @@
 // Tamamlanan her sigorta talebini bir "kayit" (lead) olarak tutar ve takip
 // eder: hangi danisman sorumlu, durum ne (bekliyor/takipte/olumlu/olumsuz),
-// notlar ve hatirlatmalar. Panel bu modulu kullanarak danismanlarin
-// talepleri sonuclandirip sonuclandirmadigini gorur.
+// notlar ve hatirlatmalar. Panel ve advisorEngine.js bu modulu kullanarak
+// danismanlarin talepleri sonuclandirip sonuclandirmadigini gorur.
 //
-// NOT: Diger her sey gibi bu da bellekte tutulur - sunucu yeniden
-// baslarsa (deploy, restart) kayitlar sifirlanir. Kalici bir veritabanina
-// tasinana kadar gecerli bir sinirlama.
+// Okuma/yazma hala hizli bellek-ici (in-memory) Map uzerinden yapilir. Ayrica
+// yukle()/kaydet() ile PostgreSQL'e periyodik yedeklenir (DATABASE_URL
+// tanimliysa) - detaylar icin db.js'e bakin.
+
+const db = require("./db");
 
 const leads = new Map(); // id -> lead
 let sayac = 0;
@@ -90,6 +92,23 @@ function hatirlatmaGonderildiIsaretle(id) {
   lead.hatirlatma.gonderildi = true;
 }
 
+// Sunucu baslarken bir kez cagrilir - DB'de kayitli talepler varsa belleğe yukler.
+async function yukle() {
+  const veri = await db.oku("leads");
+  if (veri) {
+    Object.entries(veri).forEach(([id, lead]) => leads.set(id, lead));
+    console.log(`${Object.keys(veri).length} talep veritabanindan yuklendi.`);
+    // sayac'i, en yuksek mevcut ID'nin uzerine cikacak sekilde ayarlamaya gerek yok
+    // cunku ID uretimi zaten Date.now() + sayac kombinasyonu, cakisma riski yok.
+  }
+}
+
+// Periyodik olarak (server.js'deki zamanlayici ile) cagrilir - tum talepleri DB'ye yazar.
+async function kaydet() {
+  const obj = Object.fromEntries(leads);
+  await db.yaz("leads", obj);
+}
+
 module.exports = {
   DURUMLAR,
   yeniLeadOlustur,
@@ -99,5 +118,7 @@ module.exports = {
   notEkle,
   hatirlatmaKur,
   zamaniGelenHatirlatmalar,
-  hatirlatmaGonderildiIsaretle
+  hatirlatmaGonderildiIsaretle,
+  yukle,
+  kaydet
 };

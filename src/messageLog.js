@@ -1,5 +1,11 @@
-// Tum mesajlarin (gelen/giden) gecmisini bellekte tutar.
-// Bu sayede temsilci paneli, botun ve musterinin yazdigi her seyi gorebilir.
+// Tum mesajlarin (gelen/giden) gecmisini bellekte tutar - panel bu sayede
+// botun ve musterinin yazdigi her seyi gorebilir. Okuma/yazma hala hizli
+// bellek-ici (in-memory) Map uzerinden yapilir - mevcut kodun tamaminda
+// hicbir degisiklik gerekmez. Ayrica sessionStore.js'deki ayni desenle,
+// yukle()/kaydet() ile PostgreSQL'e periyodik yedeklenir (DATABASE_URL
+// tanimliysa).
+
+const db = require("./db");
 
 const conversations = new Map(); // phone -> { name, messages: [{direction, text, timestamp}] }
 
@@ -42,4 +48,19 @@ function getMessages(phone) {
   return ensure(phone).messages;
 }
 
-module.exports = { logMessage, setName, listConversations, getMessages };
+// Sunucu baslarken bir kez cagrilir - DB'de kayitli mesaj gecmisi varsa belleğe yukler.
+async function yukle() {
+  const veri = await db.oku("messages");
+  if (veri) {
+    Object.entries(veri).forEach(([phone, convo]) => conversations.set(phone, convo));
+    console.log(`${Object.keys(veri).length} konusma gecmisi veritabanindan yuklendi.`);
+  }
+}
+
+// Periyodik olarak (server.js'deki zamanlayici ile) cagrilir - tum mesaj gecmisini DB'ye yazar.
+async function kaydet() {
+  const obj = Object.fromEntries(conversations);
+  await db.yaz("messages", obj);
+}
+
+module.exports = { logMessage, setName, listConversations, getMessages, yukle, kaydet };

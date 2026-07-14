@@ -8,7 +8,9 @@ const advisorEngine = require("./advisorEngine");
 const { sendText, sendDocument } = require("./loggedWhatsapp");
 const messageLog = require("./messageLog");
 const leadStore = require("./leadStore");
-const { getSession } = require("./sessionStore");
+const db = require("./db");
+const sessionStore = require("./sessionStore");
+const { getSession } = sessionStore;
 
 const app = express();
 app.use(bodyParser.json());
@@ -222,9 +224,6 @@ app.get("/", (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Sunucu ${PORT} portunda calisiyor.`);
-});
 
 // --- Hatirlatma zamanlayicisi ---
 // Her dakika, zamani gelmis (ve henuz gonderilmemis) hatirlatmalari kontrol
@@ -255,6 +254,53 @@ async function hatirlatmalariKontrolEt() {
   }
 }
 
-setInterval(() => {
-  hatirlatmalariKontrolEt().catch((err) => console.error("Hatirlatma kontrolu hatasi:", err));
-}, HATIRLATMA_KONTROL_SIKLIGI_MS);
+// --- Kalici depolama: acilista yukleme, calisirken periyodik yedekleme ---
+// DATABASE_URL tanimliysa (Railway'de PostgreSQL eklenmisse), tum oturumlar,
+// mesaj gecmisi ve talepler her 15 saniyede bir ve kapanmadan hemen once
+// otomatik olarak veritabanina yedeklenir. Tanimli degilse bu fonksiyonlar
+// sessizce hicbir sey yapmaz - sistem eskisi gibi sadece bellekte calisir.
+const YEDEKLEME_SIKLIGI_MS = 15 * 1000;
+
+async function tumVeriyiKaydet() {
+  await Promise.all([
+    sessionStore.kaydet().catch((err) => console.error("Oturumlar kaydedilemedi:", err.message)),
+    leadStore.kaydet().catch((err) => console.error("Talepler kaydedilemedi:", err.message)),
+    messageLog.kaydet().catch((err) => console.error("Mesaj gecmisi kaydedilemedi:", err.message))
+  ]);
+}
+
+async function baslat() {
+  await db.init();
+  await sessionStore.yukle();
+  await leadStore.yukle();
+  await messageLog.yukle();
+
+  app.listen(PORT, () => {
+    console.log(`Sunucu ${PORT} portunda calisiyor.`);
+  });
+
+  setInterval(() => {
+    tumVeriyiKaydet();
+  }, YEDEKLEME_SIKLIGI_MS);
+
+  setInterval(() => {
+    hatirlatmalariKontrolEt().catch((err) => console.error("Hatirlatma kontrolu hatasi:", err));
+  }, HATIRLATMA_KONTROL_SIKLIGI_MS);
+
+  // Railway bir deploy/restart sirasinda once SIGTERM gonderir - bu sinyali
+  // yakalayip kapanmadan hemen once son bir kez kaydederek veri kaybini
+  // en aza indiriyoruz.
+  const kapatirkenKaydet = async (sinyal) => {
+    console.log(`${sinyal} alindi, kapanmadan once veriler kaydediliyor...`);
+    try {
+      await tumVeriyiKaydet();
+    } catch (err) {
+      console.error("Kapanirken kaydetme hatasi:", err.message);
+    }
+    process.exit(0);
+  };
+  process.on("SIGTERM", () => kapatirkenKaydet("SIGTERM"));
+  process.on("SIGINT", () => kapatirkenKaydet("SIGINT"));
+}
+
+baslat();

@@ -95,7 +95,7 @@ async function anaMenuGoster(from, session) {
   if (acikLeadler.length === 0) {
     await sendText(
       from,
-      `Şu an açık bir talebiniz yok. 🎉 Yeni bir talep oluşturmak isterseniz "menü" yazabilirsiniz.`
+      `Şu an açık bir talebiniz yok. 🎉 Yeni bir talep oluşturmak isterseniz "evet" yazabilirsiniz.`
     );
     return;
   }
@@ -239,7 +239,7 @@ async function handleAdvisorMessage(from, parsed) {
   const userText = parsed.type === "text" ? parsed.text.trim() : parsed.interactiveTitle;
 
   // Her zaman "menu"/"iptal"/"geri" yazarak karsilama ekranina donulebilir.
-  if (parsed.type === "text" && /^(men[uü]|iptal|geri)$/i.test(userText || "")) {
+  if (parsed.type === "text" && /^(men[uü]|iptal|geri|evet)$/i.test(userText || "")) {
     await karsilamaGoster(from, session);
     return;
   }
@@ -368,7 +368,7 @@ async function handleAdvisorMessage(from, parsed) {
       session.state = "DANISMAN_YENI_TELEFON_BEKLE";
       await sendText(
         from,
-        "Sigortalının telefon numarasını (başında ülke koduyla, örn: 905551234567) paylaşır mısınız?"
+        "Sigortalının telefon numarasını (başında ülke koduyla, örn: 905551234567 şeklinde) paylaşır mısınız?"
       );
       return;
     }
@@ -378,7 +378,7 @@ async function handleAdvisorMessage(from, parsed) {
       if (temiz.length < 10 || temiz.length > 15) {
         await sendText(
           from,
-          "Lütfen geçerli bir telefon numarası yazar mısınız? (Başında ülke koduyla, örn: 905551234567)"
+          "Lütfen geçerli bir telefon numarası yazar mısınız? (Başında ülke koduyla, örn: 905551234567 şeklinde)"
         );
         return;
       }
