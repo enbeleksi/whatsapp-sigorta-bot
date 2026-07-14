@@ -228,25 +228,26 @@ function kompaktDetayOlustur(flow, session, telefon) {
 // 1) Eger Railway'de AGENT_DETAY_TEMPLATE_NAME ayarlanmissa (tek degiskenli,
 //    tum detaylari iceren onaylanmis bir sablon), once onu dener - basariliysa
 //    danisman TUM bilgiyi WhatsApp'ta gorur, panele bakmasina gerek kalmaz.
+//    Basarili olursa BURADA DURULUR - ayrica baska bir mesaj gonderilmez,
+//    cunku tum bilgi zaten bu tek mesajda var (gereksiz tekrari onlemek icin).
 // 2) O basarisiz olursa ya da ayarlanmamissa, AGENT_TEMPLATE_NAME (kisa,
 //    3 degiskenli eski sablon) varsa onu dener - sadece temel bilgiyi iletir.
-// 3) Ayrica (sablonlar basarili olsun olmasin) detayli metni normal metin
+// 3) Ayrica (yalnizca 1. adim basarisiz olduysa) detayli metni normal metin
 //    olarak da gondermeyi dener - pencere acik ise ekstra bir kopya daha ulasir.
 async function bildirimGonder(numara, urunAdi, musteriAdi, telefon, detayliMetin, kompaktDetay) {
   const detayliSablonAdi = process.env.AGENT_DETAY_TEMPLATE_NAME;
   const kisaSablonAdi = process.env.AGENT_TEMPLATE_NAME;
-  let detayliSablonBasarili = false;
 
   if (detayliSablonAdi && kompaktDetay) {
     try {
       await sendTemplate(numara, detayliSablonAdi, "tr", { detay: kompaktDetay }, detayliMetin);
-      detayliSablonBasarili = true;
+      return; // basarili - tum detay zaten iletildi, baska mesaj gondermeye gerek yok
     } catch (err) {
       console.error("Detayli sablon bildirimi gonderilemedi:", err?.response?.data || err.message);
     }
   }
 
-  if (!detayliSablonBasarili && kisaSablonAdi) {
+  if (kisaSablonAdi) {
     const kisaOzet =
       `🔔 Yeni bir ${urunAdi} talebi geldi.\n\n` +
       `Müşteri: ${musteriAdi}\n` +
