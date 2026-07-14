@@ -153,6 +153,48 @@ app.post("/api/panel/leads/:id/hatirlatma", panelAuth, (req, res) => {
   res.json({ ok: true, lead });
 });
 
+// --- Istatistikler ---
+// Tum talep verisinden ozet metrikler cikartir: urun bazinda, danisman
+// bazinda, durum bazinda dagilim, donusum orani, son 7/30 gunluk talep sayisi.
+app.get("/api/panel/stats", panelAuth, (req, res) => {
+  const leads = leadStore.tumLeadleriGetir();
+
+  const urunBazinda = {};
+  const danismanBazinda = {};
+  const durumBazinda = {};
+  leadStore.DURUMLAR.forEach((d) => (durumBazinda[d] = 0));
+
+  const simdi = Date.now();
+  const GUN_MS = 24 * 60 * 60 * 1000;
+  let son7Gun = 0;
+  let son30Gun = 0;
+
+  leads.forEach((lead) => {
+    urunBazinda[lead.urun] = (urunBazinda[lead.urun] || 0) + 1;
+    const danisman = lead.danismanAdi || "Atanmamış";
+    danismanBazinda[danisman] = (danismanBazinda[danisman] || 0) + 1;
+    durumBazinda[lead.durum] = (durumBazinda[lead.durum] || 0) + 1;
+
+    const yas = simdi - lead.olusturulmaZamani;
+    if (yas <= 7 * GUN_MS) son7Gun += 1;
+    if (yas <= 30 * GUN_MS) son30Gun += 1;
+  });
+
+  const kapananSayisi = (durumBazinda["Olumlu Kapandı"] || 0) + (durumBazinda["Olumsuz Kapandı"] || 0);
+  const donusumOrani =
+    kapananSayisi > 0 ? Math.round(((durumBazinda["Olumlu Kapandı"] || 0) / kapananSayisi) * 100) : null;
+
+  res.json({
+    toplamTalep: leads.length,
+    son7Gun,
+    son30Gun,
+    urunBazinda,
+    danismanBazinda,
+    durumBazinda,
+    donusumOrani
+  });
+});
+
 // 1) Meta webhook DOGRULAMA (GET) - Meta App panelinde webhook'u kaydederken cagirilir
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
