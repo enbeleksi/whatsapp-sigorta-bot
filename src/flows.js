@@ -200,11 +200,33 @@ const INSAAT_YILI_SORU = {
 // Tum urunlerde ortak kullanilan danisman listesi. Musteri daha once bir
 // danismanla gorustuyse, toplanan bilgiler urunun varsayilan sorumlusuna degil,
 // o danismanin numarasina gider. Ekip degistikce bu listeyi guncelleyebilirsiniz.
+// Telefon numarasi bilinen danismanlar - resolveAgentNumber bu listeye bakarak
+// yonlendirme yapar. Asagidaki TUM_DANISMAN_ISIMLERI listesindeki bir isim
+// burada YOKSA (henuz telefon numarasi paylasilmadiysa), musteri o ismi secse
+// bile talep otomatik olarak urunun varsayilan sorumlusuna duser - hicbir
+// hata olusmaz, sadece dogrudan o kisiye iletilemez. Numarasi geldiginde
+// asagiya `{ name: "Yasemin", number: "9053XXXXXXX" }` gibi eklemeniz yeterli.
 const DANISMANLAR = [
   { name: "Enbel", number: "905326876126" },
-  { name: "Fırat", number: "905527902616" },
   { name: "Seda", number: "905324176026" },
-  { name: "Bahadır", number: "905380711711" }
+  { name: "Bahadır", number: "905380711711" },
+  { name: "Fırat", number: "905527902616" }
+  // Yasemin, Furkan, Simge, Tuğçe - telefon numaralari henuz bizde yok.
+];
+
+// Musteriye "hangi danisman" diye sorulurken gosterilen TAM liste (numarasi
+// olsun olmasin tum danismanlar burada gorunur, cunku musteri kiminle
+// gorustugunu soyleyebilmeli - yonlendirme ise sadece yukaridaki DANISMANLAR
+// listesindeki numarasi olanlar icin otomatik calisir).
+const TUM_DANISMAN_ISIMLERI = [
+  "Enbel",
+  "Seda",
+  "Bahadır",
+  "Fırat",
+  "Yasemin",
+  "Furkan",
+  "Simge",
+  "Tuğçe"
 ];
 
 // Tum urunlerin basinda sorulan, daha once bir danismanla gorusulup
@@ -220,7 +242,7 @@ const DANISMAN_SORULARI = [
     id: "danisman_adi",
     text: "Hangi danışmanımızla görüşme fırsatınız oldu?",
     type: "choice",
-    options: ["Enbel", "Fırat", "Seda", "Bahadır"],
+    options: TUM_DANISMAN_ISIMLERI,
     // Sadece bir onceki soruya "Evet" cevabi verildiyse sorulur.
     skipIf: (answers) => answers.danisman_gorustu_mu !== "Evet"
   }
