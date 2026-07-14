@@ -1,13 +1,16 @@
-// Danismanlarin, panele hic girmeden, dogrudan WhatsApp uzerinden kendi
-// taleplerini gormesini, not eklemesini, durum degistirmesini ve hatirlatma
-// kurmasini saglar. Bir mesaj bilinen bir danisman numarasindan geldiginde,
-// server.js bu modulu cagirir - musteri akisina (conversationEngine) hic
-// girmez, tamamen ayri ve basit bir menu sistemidir.
+// Danismanlarin, panele hic girmeden, dogrudan WhatsApp uzerinden:
+// 1) Kendi taleplerini gormesini, not eklemesini, durum degistirmesini,
+//    hatirlatma kurmasini,
+// 2) Musteri (sigortali) adina YENI bir talep olusturmasini
+// saglar. Bir mesaj bilinen bir danisman numarasindan geldiginde, server.js
+// bu modulu cagirir - musteri akisina (conversationEngine) hic girmez,
+// tamamen ayri bir menu sistemidir.
 
 const { getSession } = require("./sessionStore");
 const { sendText, sendButtons, sendList } = require("./loggedWhatsapp");
 const leadStore = require("./leadStore");
 const flows = require("./flows");
+const conversationEngine = require("./conversationEngine");
 
 // Danisman listesi tum urunlerde ayni referansi paylasir (flows.js'deki
 // DANISMANLAR sabiti), o yuzden herhangi bir urunden okuyabiliriz.
@@ -19,6 +22,31 @@ function danismaniBul(numara) {
 
 function isDanisman(numara) {
   return !!danismaniBul(numara);
+}
+
+// --- Turkce karakter toleransli secenek eslestirme (conversationEngine.js'deki
+// ile ayni mantik, kucuk oldugu icin burada ayrica tanimlandi) ---
+function normalizeTr(str) {
+  return (str || "")
+    .replace(/İ/g, "i")
+    .replace(/I/g, "i")
+    .replace(/ı/g, "i")
+    .toLowerCase()
+    .replace(/ğ/g, "g")
+    .replace(/ü/g, "u")
+    .replace(/ş/g, "s")
+    .replace(/ö/g, "o")
+    .replace(/ç/g, "c");
+}
+
+function matchOption(userText, options) {
+  const normalized = normalizeTr((userText || "").trim());
+  if (!normalized) return null;
+  const exact = options.find((opt) => normalizeTr(opt) === normalized);
+  if (exact) return exact;
+  return (
+    options.find((opt) => normalized.includes(normalizeTr(opt)) || normalizeTr(opt).includes(normalized)) || null
+  );
 }
 
 // GG.AA.YYYY SS:DD formatinda bir tarih-saat metnini gecerliyse zaman
@@ -34,15 +62,27 @@ function tarihSaatDogrula(metin) {
   const saat = parseInt(eslesme[4], 10);
   const dakika = parseInt(eslesme[5], 10);
   const tarih = new Date(yil, ay - 1, gun, saat, dakika);
-  const geciyorMu =
+  const gecerliMi =
     tarih.getFullYear() === yil &&
     tarih.getMonth() === ay - 1 &&
     tarih.getDate() === gun &&
     tarih.getHours() === saat &&
     tarih.getMinutes() === dakika;
-  return geciyorMu ? tarih.getTime() : null;
+  return gecerliMi ? tarih.getTime() : null;
 }
 
+// --- Karsilama (ana giris noktasi) ---
+async function karsilamaGoster(from, session) {
+  const danisman = danismaniBul(from);
+  session.state = "DANISMAN_KARSILAMA";
+  await sendButtons(
+    from,
+    `Merhaba ${danisman ? danisman.name : ""}! 👋 Ne yapmak istersiniz?`,
+    ["Yeni Talep Oluştur", "Taleplerimi Gör"]
+  );
+}
+
+// --- Mevcut talepleri listeleme/yonetme ---
 async function anaMenuGoster(from, session) {
   const danisman = danismaniBul(from);
   const acikLeadler = leadStore
@@ -55,7 +95,7 @@ async function anaMenuGoster(from, session) {
   if (acikLeadler.length === 0) {
     await sendText(
       from,
-      `Merhaba ${danisman ? danisman.name : ""}! 👋 Şu an açık bir talebiniz yok. 🎉`
+      `Şu an açık bir talebiniz yok. 🎉 Yeni bir talep oluşturmak isterseniz "menü" yazabilirsiniz.`
     );
     return;
   }
@@ -67,7 +107,7 @@ async function anaMenuGoster(from, session) {
 
   await sendList(
     from,
-    `Merhaba ${danisman ? danisman.name : ""}! 👋 Açık talepleriniz aşağıda, detay görmek istediğinizi seçin:`,
+    `Açık talepleriniz aşağıda, detay görmek istediğinizi seçin:`,
     "Talep Seç",
     satirlar
   );
@@ -99,17 +139,125 @@ async function leadDetayGoster(from, session, lead) {
   await sendButtons(from, "Ne yapmak istersiniz?", ["Not Ekle", "Durum Değiştir", "Hatırlatma Kur"]);
 }
 
+// --- Musteri (sigortali) adina yeni talep olusturma akisi ---
+
+// Bir sorular listesinden, danisman modunda gosterilmeyecek (danismandaGizle)
+// ya da skipIf ile atlanmasi gereken sorulari atlayip bir sonraki gecerli
+// index'i bulur.
+function sonrakiGecerliIndex(sorular, answers, baslangic) {
+  let idx = baslangic;
+  while (idx < sorular.length) {
+    const soru = sorular[idx];
+    if (soru.danismandaGizle || (soru.skipIf && soru.skipIf(answers))) {
+      idx += 1;
+      continue;
+    }
+    break;
+  }
+  return idx;
+}
+
+async function yeniTalepUrunSec(from, session) {
+  session.state = "DANISMAN_YENI_URUN_SEC";
+  const urunAnahtarlari = Object.keys(flows);
+  session.danismanUrunAnahtarlari = urunAnahtarlari;
+  const etiketler = urunAnahtarlari.map((k) => flows[k].menuLabel || flows[k].label);
+  await sendList(from, "Hangi ürün için yeni bir talep oluşturmak istersiniz?", "Ürün Seç", etiketler);
+}
+
+async function danismanSoruSor(from, session) {
+  const flow = flows[session.danismanYeniUrunKey];
+  const soru = flow.questions[session.danismanYeniSoruIndex];
+  const metin = conversationEngine.resolveDanismanText(soru, session.danismanYeniAnswers);
+
+  if (soru.type === "choice") {
+    if (soru.options.length > 3) {
+      await sendList(from, metin, "Seçin", soru.options);
+    } else {
+      await sendButtons(from, metin, soru.options);
+    }
+  } else {
+    await sendText(from, metin);
+  }
+}
+
+async function danismanYeniTalepiTamamla(from, session) {
+  const flow = flows[session.danismanYeniUrunKey];
+  const danisman = danismaniBul(from);
+  const sigortaliTelefon = session.danismanYeniTelefon;
+  const answers = session.danismanYeniAnswers;
+  const musteriAdi = answers.ad_soyad || "(isim alınmadı)";
+  const olusturanEtiketi = danisman ? danisman.name : "Bir danışman";
+
+  // Danismandaki (bu akista hic sorulmayan) sorulari cikartip ozet olusturuyoruz.
+  const filtrelenmisFlow = { ...flow, questions: flow.questions.filter((q) => !q.danismandaGizle) };
+  const askedQuestions = filtrelenmisFlow.questions.filter((q) => !(q.skipIf && q.skipIf(answers)));
+  const summaryLines = askedQuestions.map((q) => {
+    const soruMetni = conversationEngine.resolveDanismanText(q, answers);
+    return `- ${soruMetni.replace(/\?$/, "")}: ${answers[q.id]}`;
+  });
+
+  const agentMessage =
+    `\u{1F4CB} Yeni sigorta teklif talebi\n` +
+    `📌 Bu talep ${olusturanEtiketi} tarafından oluşturuldu.\n\n` +
+    `Sigortalı: ${musteriAdi}\n` +
+    `Telefon: ${sigortaliTelefon}\n` +
+    `Ürün: ${flow.label}\n\n` +
+    summaryLines.join("\n");
+
+  const sahteSession = { answers, name: musteriAdi };
+  const kompaktDetayTemel = conversationEngine.kompaktDetayOlustur(filtrelenmisFlow, sahteSession, sigortaliTelefon);
+  const kompaktDetay = `[${olusturanEtiketi} tarafından oluşturuldu] ${kompaktDetayTemel}`;
+
+  // Guvenlik agi (Enbel her zaman, Bahadır elementer branslarda) + kendisine
+  // tekrar bildirim gondermeye gerek yok, zaten kendisi olusturdu.
+  const bildirilecekNumaralar = conversationEngine.guvenlikAgiNumaralari(flow, from);
+  bildirilecekNumaralar.delete(from);
+
+  for (const numara of bildirilecekNumaralar) {
+    await conversationEngine.bildirimGonder(numara, flow.label, musteriAdi, sigortaliTelefon, agentMessage, kompaktDetay);
+  }
+
+  leadStore.yeniLeadOlustur({
+    telefon: sigortaliTelefon,
+    musteriAdi,
+    urun: flow.label,
+    danismanAdi: danisman ? danisman.name : null,
+    danismanNumarasi: from,
+    ozet: kompaktDetay
+  });
+
+  await sendText(
+    from,
+    `Talep başarıyla oluşturuldu ✅ ${musteriAdi} için ${flow.label} talebi kaydedildi ve ilgili kişilere iletildi.`
+  );
+  await karsilamaGoster(from, session);
+}
+
 async function handleAdvisorMessage(from, parsed) {
   const session = getSession(from);
   const userText = parsed.type === "text" ? parsed.text.trim() : parsed.interactiveTitle;
 
-  // Her zaman "menu"/"iptal"/"geri" yazarak ana menuye donulebilir.
+  // Her zaman "menu"/"iptal"/"geri" yazarak karsilama ekranina donulebilir.
   if (parsed.type === "text" && /^(men[uü]|iptal|geri)$/i.test(userText || "")) {
-    await anaMenuGoster(from, session);
+    await karsilamaGoster(from, session);
     return;
   }
 
   switch (session.state) {
+    case "DANISMAN_KARSILAMA": {
+      if (userText === "Yeni Talep Oluştur") {
+        await yeniTalepUrunSec(from, session);
+        return;
+      }
+      if (userText === "Taleplerimi Gör") {
+        await anaMenuGoster(from, session);
+        return;
+      }
+      await karsilamaGoster(from, session);
+      return;
+    }
+
     case "DANISMAN_LEAD_SECIMI": {
       if (parsed.type !== "interactive" || !parsed.interactiveId) {
         await anaMenuGoster(from, session);
@@ -145,7 +293,7 @@ async function handleAdvisorMessage(from, parsed) {
         );
         return;
       }
-      await anaMenuGoster(from, session);
+      await karsilamaGoster(from, session);
       return;
     }
 
@@ -153,7 +301,7 @@ async function handleAdvisorMessage(from, parsed) {
       const lead = leadStore.notEkle(session.danismanSeciliLeadId, userText);
       await sendText(from, "Not eklendi ✅");
       if (lead) await leadDetayGoster(from, session, lead);
-      else await anaMenuGoster(from, session);
+      else await karsilamaGoster(from, session);
       return;
     }
 
@@ -165,7 +313,7 @@ async function handleAdvisorMessage(from, parsed) {
       const lead = leadStore.durumGuncelle(session.danismanSeciliLeadId, userText);
       await sendText(from, `Durum "${userText}" olarak güncellendi ✅`);
       if (userText === "Olumlu Kapandı" || userText === "Olumsuz Kapandı" || !lead) {
-        await anaMenuGoster(from, session);
+        await karsilamaGoster(from, session);
       } else {
         await leadDetayGoster(from, session, lead);
       }
@@ -199,12 +347,95 @@ async function handleAdvisorMessage(from, parsed) {
       );
       await sendText(from, "Hatırlatma kuruldu ⏰ Zamanı gelince otomatik haber vereceğim.");
       if (lead) await leadDetayGoster(from, session, lead);
-      else await anaMenuGoster(from, session);
+      else await karsilamaGoster(from, session);
+      return;
+    }
+
+    // --- Yeni talep olusturma akisi ---
+    case "DANISMAN_YENI_URUN_SEC": {
+      if (parsed.type !== "interactive" || !parsed.interactiveId) {
+        await yeniTalepUrunSec(from, session);
+        return;
+      }
+      const index = parseInt(parsed.interactiveId.replace("list_", ""), 10);
+      const urunKey = (session.danismanUrunAnahtarlari || [])[index];
+      if (!urunKey || !flows[urunKey]) {
+        await yeniTalepUrunSec(from, session);
+        return;
+      }
+      session.danismanYeniUrunKey = urunKey;
+      session.danismanYeniAnswers = {};
+      session.state = "DANISMAN_YENI_TELEFON_BEKLE";
+      await sendText(
+        from,
+        "Sigortalının telefon numarasını (başında ülke koduyla, örn: 905551234567) paylaşır mısınız?"
+      );
+      return;
+    }
+
+    case "DANISMAN_YENI_TELEFON_BEKLE": {
+      const temiz = (userText || "").replace(/\D/g, "");
+      if (temiz.length < 10 || temiz.length > 15) {
+        await sendText(
+          from,
+          "Lütfen geçerli bir telefon numarası yazar mısınız? (Başında ülke koduyla, örn: 905551234567)"
+        );
+        return;
+      }
+      session.danismanYeniTelefon = temiz;
+      const flow = flows[session.danismanYeniUrunKey];
+      session.danismanYeniSoruIndex = sonrakiGecerliIndex(flow.questions, session.danismanYeniAnswers, 0);
+      session.state = "DANISMAN_YENI_SORU";
+      await danismanSoruSor(from, session);
+      return;
+    }
+
+    case "DANISMAN_YENI_SORU": {
+      const flow = flows[session.danismanYeniUrunKey];
+      const soru = flow.questions[session.danismanYeniSoruIndex];
+
+      if (soru.type === "choice") {
+        const secilen = matchOption(userText, soru.options);
+        if (!secilen) {
+          const metin = conversationEngine.resolveDanismanText(soru, session.danismanYeniAnswers);
+          if (soru.options.length > 3) await sendList(from, metin, "Seçin", soru.options);
+          else await sendButtons(from, metin, soru.options);
+          return;
+        }
+        session.danismanYeniAnswers[soru.id] = secilen;
+      } else {
+        if (soru.validate && !soru.validate(userText, session.danismanYeniAnswers)) {
+          const hint =
+            typeof soru.validationError === "function"
+              ? soru.validationError(userText, session.danismanYeniAnswers)
+              : soru.validationError || "Bu bilgi doğru formatta görünmüyor, lütfen tekrar dener misiniz?";
+          await sendText(from, hint);
+          return;
+        }
+        session.danismanYeniAnswers[soru.id] = userText;
+      }
+
+      if (soru.tepki) {
+        const tepkiMesaji = soru.tepki(session.danismanYeniAnswers[soru.id]);
+        if (tepkiMesaji) await sendText(from, tepkiMesaji);
+      }
+
+      session.danismanYeniSoruIndex = sonrakiGecerliIndex(
+        flow.questions,
+        session.danismanYeniAnswers,
+        session.danismanYeniSoruIndex + 1
+      );
+
+      if (session.danismanYeniSoruIndex >= flow.questions.length) {
+        await danismanYeniTalepiTamamla(from, session);
+      } else {
+        await danismanSoruSor(from, session);
+      }
       return;
     }
 
     default: {
-      await anaMenuGoster(from, session);
+      await karsilamaGoster(from, session);
     }
   }
 }

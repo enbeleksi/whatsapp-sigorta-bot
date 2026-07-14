@@ -6,6 +6,13 @@
 //   gibi) onceki cevaba gore soru metninin degismesi gerekir - bu durumda text bir
 //   fonksiyon olabilir: (answers) => "soru metni". answers, o ana kadar verilen
 //   tum cevaplari icerir (id -> cevap).
+// question.danismanText: musteri modundaki "text" alaninin danisman-modu (3. sahis,
+//   "sigortalının ..." tarzi) esdegeri. Bir danisman musterisi adina yeni talep
+//   olustururken bu metin kullanilir. Belirtilmezse text ile ayni kabul edilir
+//   (bazi sorular zaten notr/3. sahis oldugu icin degistirmeye gerek yok).
+// question.danismandaGizle: true ise, danisman "musteri adina yeni talep" akisinda
+//   bu soru hic sorulmaz (orn. "daha once danismanla gorustunuz mu" sorusu, danisman
+//   zaten kendisi oldugu icin anlamsizdir).
 // question.validate: (deger, answers) => true/false. Sadece "text" tipi sorularda
 //   kullanilir. Onceki cevaplara da bakabilir (orn. daire kati, bina kat sayisindan
 //   fazla olamaz). false donerse, bot ayni soruyu validationError mesajiyla tekrar
@@ -14,6 +21,7 @@
 //   basarisiz olunca gosterilecek mesaj.
 // question.sameAsAccountHolder: true ise ve musterinin ismi zaten biliniyorsa
 //   (WhatsApp konusmasinin basinda alinmis), bu soru tekrar sorulmaz, otomatik doldurulur.
+//   (Sadece musteri modunda gecerlidir, danisman modunda uygulanmaz.)
 //
 // NOT: Nezaket ifadeleri (ogrenebilir miyim / paylasir misiniz / belirtir misiniz vb.)
 // bilinçli olarak cesitlendirilmistir, ayni sohbette hep ayni kalip tekrar etmesin diye.
@@ -35,12 +43,16 @@ const {
 const MESLEK_SORU = {
   id: "meslek",
   text: "Mesleğinizi paylaşır mısınız? 💼 Bazı meslek gruplarına özel indirimler uygulayabiliyoruz, bu yüzden soruyoruz 😊",
+  danismanText:
+    "Sigortalının mesleğini paylaşır mısınız? 💼 Bazı meslek gruplarına özel indirimler uygulayabiliyoruz.",
   type: "text"
 };
 
 const MESLEK_SORU_SON = {
   id: "meslek",
   text: "Son olarak mesleğinizi paylaşır mısınız? 💼 Bazı meslek gruplarına özel indirimler uygulayabiliyoruz, bu yüzden soruyoruz 😊",
+  danismanText:
+    "Son olarak sigortalının mesleğini paylaşır mısınız? 💼 Bazı meslek gruplarına özel indirimler uygulayabiliyoruz.",
   type: "text"
 };
 
@@ -53,6 +65,7 @@ const MESLEK_SORU_UCUNCU_SAHIS = {
 const TC_KIMLIK_SORU = {
   id: "tc_kimlik",
   text: "Son olarak T.C. kimlik numaranızı yazar mısınız?",
+  danismanText: "Son olarak sigortalının T.C. kimlik numarasını yazar mısınız?",
   type: "text",
   validate: tcKimlikGecerliMi,
   validationError:
@@ -61,6 +74,7 @@ const TC_KIMLIK_SORU = {
 
 // Trafik/Kasko'da sorulan TC, hesap sahibinin degil ruhsat sahibinin TC'sidir
 // (arac baskasi adina kayitli olabilir, poliçe ruhsat sahibi uzerinden hazirlanir).
+// Zaten 3. sahis oldugu icin danisman modunda da aynen kullanilabilir.
 const RUHSAT_SAHIBI_TC_SORU = {
   id: "tc_kimlik",
   text: "Son olarak ruhsat sahibinin T.C. kimlik numarasını yazar mısınız?",
@@ -71,7 +85,8 @@ const RUHSAT_SAHIBI_TC_SORU = {
 };
 
 // Ruhsat belge seri no, ruhsatin sag alt kosesinde yer alir; harflerle baslayip
-// rakamlarla devam eder (orn. "AE123456").
+// rakamlarla devam eder (orn. "AE123456"). Metin zaten notr (kimseye ait "-nız"
+// eki yok), danisman modunda da aynen kullanilabilir.
 const RUHSAT_SERI_NO_SORU = {
   id: "ruhsat_seri_no",
   text:
@@ -152,6 +167,7 @@ function sehirTepkisiUret(cevap) {
 const SEHIR_SORU = {
   id: "sehir",
   text: "Hangi şehirden bize ulaştığınızı öğrenebilir miyim?",
+  danismanText: "Sigortalı hangi şehirde, öğrenebilir miyim?",
   type: "text",
   tepki: sehirTepkisiUret
 };
@@ -170,6 +186,7 @@ const BINA_KAT_SAYISI_SORU = {
 const DAIRE_KATI_SORU = {
   id: "dairenin_bulundugu_kat",
   text: "Peki daireniz kaçıncı katta?",
+  danismanText: "Peki sigortalının dairesi kaçıncı katta?",
   type: "text",
   validate: (deger, answers) => {
     if (!pozitifSayiMi(deger) && deger.trim() !== "0") return false;
@@ -179,7 +196,7 @@ const DAIRE_KATI_SORU = {
     return true;
   },
   validationError: (deger, answers) =>
-    `Vay canına, çatının da üstüne mi çıkmışsınız? 😄 Binanız ${answers.bina_kat_sayisi} kattan oluşuyor, dairenizin bulunduğu katı bu aralıkta tekrar yazar mısınız?`
+    `Girilen kat, binanın toplam kat sayısından fazla olamaz 😄 Bina ${answers.bina_kat_sayisi} kattan oluşuyor, bu aralıkta tekrar yazar mısınız?`
 };
 
 // Insaat yili 1900'den once girilirse (format olarak dogru rakam olsa bile,
@@ -233,12 +250,15 @@ const TUM_DANISMAN_ISIMLERI = [
 
 // Tum urunlerin basinda sorulan, daha once bir danismanla gorusulup
 // gorusulmedigini soran iki soru. Ikinci soru sadece "Evet" cevabinda sorulur.
+// danismandaGizle: true - bir danisman musterisi adina yeni talep olustururken
+// bu iki soru hic sorulmaz (danisman zaten kendisi oldugu icin anlamsizdir).
 const DANISMAN_SORULARI = [
   {
     id: "danisman_gorustu_mu",
     text: "Daha önce acentemiz bünyesindeki danışmanlarımızdan biriyle görüşme fırsatınız oldu mu?",
     type: "choice",
-    options: ["Evet", "Hayır"]
+    options: ["Evet", "Hayır"],
+    danismandaGizle: true
   },
   {
     id: "danisman_adi",
@@ -246,7 +266,8 @@ const DANISMAN_SORULARI = [
     type: "choice",
     options: TUM_DANISMAN_ISIMLERI,
     // Sadece bir onceki soruya "Evet" cevabi verildiyse sorulur.
-    skipIf: (answers) => answers.danisman_gorustu_mu !== "Evet"
+    skipIf: (answers) => answers.danisman_gorustu_mu !== "Evet",
+    danismandaGizle: true
   }
 ];
 
@@ -262,10 +283,17 @@ module.exports = {
       "Merhaba! 😊 Yeni eviniz hayırlı olsun, içinde huzur dolu günler geçirmenizi dileriz! 🏠💛 DASK poliçenizi hemen hazırlayabilmemiz için birkaç bilgi alalım, olur mu?",
     questions: [
       ...DANISMAN_SORULARI,
-      { id: "ad_soyad", text: "İsim ve soyisminizi paylaşır mısınız?", type: "text", sameAsAccountHolder: true },
+      {
+        id: "ad_soyad",
+        text: "İsim ve soyisminizi paylaşır mısınız?",
+        danismanText: "Sigortalının ismini ve soyismini paylaşır mısınız?",
+        type: "text",
+        sameAsAccountHolder: true
+      },
       {
         id: "mulkiyet_durumu",
         text: "Sigortalanacak konut size mi ait, yoksa kiracı mısınız?",
+        danismanText: "Sigortalanacak konut sigortalıya mı ait, yoksa sigortalı kiracı mı?",
         type: "choice",
         options: ["Ev Sahibiyim", "Kiracıyım"]
       },
@@ -293,6 +321,10 @@ module.exports = {
           answers.mulkiyet_durumu === "Kiracıyım"
             ? "Son olarak ev sahibinin T.C. kimlik numarasını yazar mısınız? (Poliçeyi bu bilgiyle hazırlayacağız)"
             : "Son olarak T.C. kimlik numaranızı yazar mısınız? (Poliçeyi bu bilgiyle hazırlayacağız)",
+        danismanText: (answers) =>
+          answers.mulkiyet_durumu === "Kiracıyım"
+            ? "Son olarak ev sahibinin T.C. kimlik numarasını yazar mısınız? (Poliçeyi bu bilgiyle hazırlayacağız)"
+            : "Son olarak sigortalının T.C. kimlik numarasını yazar mısınız? (Poliçeyi bu bilgiyle hazırlayacağız)",
         type: "text",
         validate: tcKimlikGecerliMi,
         validationError:
@@ -307,13 +339,20 @@ module.exports = {
     advisors: DANISMANLAR,
     questions: [
       ...DANISMAN_SORULARI,
-      { id: "ad_soyad", text: "İsim ve soyisminizi paylaşır mısınız?", type: "text", sameAsAccountHolder: true },
+      {
+        id: "ad_soyad",
+        text: "İsim ve soyisminizi paylaşır mısınız?",
+        danismanText: "Sigortalının ismini ve soyismini paylaşır mısınız?",
+        type: "text",
+        sameAsAccountHolder: true
+      },
       // DASK'in aksine Konut Sigortasi mutlaka ev sahibinin uzerine olmak
       // zorunda degil - kiraci da kendi uzerine yaptirabilir. Bu yuzden
       // "kiracı mısınız" yerine dogrudan police kimin uzerine sorusu soruyoruz.
       {
         id: "police_kimin_uzerine",
         text: "Konut sigortasını kendi üzerinize mi, yoksa ev sahibinin üzerine mi yaptıracaksınız?",
+        danismanText: "Konut sigortası sigortalının kendi üzerine mi, yoksa ev sahibinin üzerine mi olacak?",
         type: "choice",
         options: ["Kendi Üzerime", "Ev Sahibinin Üzerine"]
       },
@@ -341,6 +380,10 @@ module.exports = {
           answers.police_kimin_uzerine === "Ev Sahibinin Üzerine"
             ? "Son olarak ev sahibinin T.C. kimlik numarasını yazar mısınız? (Poliçeyi bu bilgiyle hazırlayacağız)"
             : "Son olarak T.C. kimlik numaranızı yazar mısınız? (Poliçeyi bu bilgiyle hazırlayacağız)",
+        danismanText: (answers) =>
+          answers.police_kimin_uzerine === "Ev Sahibinin Üzerine"
+            ? "Son olarak ev sahibinin T.C. kimlik numarasını yazar mısınız? (Poliçeyi bu bilgiyle hazırlayacağız)"
+            : "Son olarak sigortalının T.C. kimlik numarasını yazar mısınız? (Poliçeyi bu bilgiyle hazırlayacağız)",
         type: "text",
         validate: tcKimlikGecerliMi,
         validationError:
@@ -360,10 +403,17 @@ module.exports = {
       "Merhaba! 😊 Yeni aracınız hayırlı olsun, güle güle kullanın! 🚗✨ Trafik sigortanızı en kısa sürede hazırlayabilmemiz için birkaç küçük bilgiye ihtiyacımız olacak, hemen başlayalım mı?",
     questions: [
       ...DANISMAN_SORULARI,
-      { id: "ad_soyad", text: "İsim ve soyisminizi paylaşır mısınız?", type: "text", sameAsAccountHolder: true },
+      {
+        id: "ad_soyad",
+        text: "İsim ve soyisminizi paylaşır mısınız?",
+        danismanText: "Sigortalının ismini ve soyismini paylaşır mısınız?",
+        type: "text",
+        sameAsAccountHolder: true
+      },
       {
         id: "plaka",
         text: "Aracınızın plakasını belirtir misiniz? (Örn: 34 ABC 123)",
+        danismanText: "Sigortalının aracının plakasını belirtir misiniz? (Örn: 34 ABC 123)",
         type: "text",
         validate: plakaGecerliMi,
         validationError: "Lütfen plakayı doğru formatta yazar mısınız? (Örn: 34 ABC 123)"
@@ -383,10 +433,17 @@ module.exports = {
     advisors: DANISMANLAR,
     questions: [
       ...DANISMAN_SORULARI,
-      { id: "ad_soyad", text: "İsim ve soyisminizi paylaşır mısınız?", type: "text", sameAsAccountHolder: true },
+      {
+        id: "ad_soyad",
+        text: "İsim ve soyisminizi paylaşır mısınız?",
+        danismanText: "Sigortalının ismini ve soyismini paylaşır mısınız?",
+        type: "text",
+        sameAsAccountHolder: true
+      },
       {
         id: "plaka",
         text: "Aracınızın plakasını belirtir misiniz? (Örn: 34 ABC 123)",
+        danismanText: "Sigortalının aracının plakasını belirtir misiniz? (Örn: 34 ABC 123)",
         type: "text",
         validate: plakaGecerliMi,
         validationError: "Lütfen plakayı doğru formatta yazar mısınız? (Örn: 34 ABC 123)"
@@ -408,7 +465,8 @@ module.exports = {
         id: "kimin_icin",
         text: "Kimin için sigorta yaptırmak istiyorsunuz?",
         type: "choice",
-        options: ["Kendim", "Eşim", "Çocuğum", "Ailem (Birden Fazla)"]
+        options: ["Kendim", "Eşim", "Çocuğum", "Ailem (Birden Fazla)"],
+        danismandaGizle: true
       },
       { id: "ad_soyad", text: "Sigortalanacak kişinin ismini ve soyismini paylaşır mısınız?", type: "text" },
       {
@@ -435,6 +493,8 @@ module.exports = {
         id: "tc_kimlik",
         text:
           "Teklifinizi hazırlayabilmemiz için son olarak T.C. kimlik numarasına ihtiyacımız var. Bu bilgi sadece teklif hazırlığı amacıyla kullanılacak ve güvenle saklanacaktır.",
+        danismanText:
+          "Teklifi hazırlayabilmemiz için son olarak sigortalının T.C. kimlik numarasına ihtiyacımız var. Bu bilgi sadece teklif hazırlığı amacıyla kullanılacak ve güvenle saklanacaktır.",
         type: "text",
         validate: tcKimlikGecerliMi,
         validationError:
@@ -454,7 +514,8 @@ module.exports = {
         id: "kimin_icin",
         text: "Kimin için sigorta yaptırmak istiyorsunuz?",
         type: "choice",
-        options: ["Kendim", "Eşim", "Çocuğum", "Ailem (Birden Fazla)"]
+        options: ["Kendim", "Eşim", "Çocuğum", "Ailem (Birden Fazla)"],
+        danismandaGizle: true
       },
       { id: "ad_soyad", text: "Sigortalanacak kişinin ismini ve soyismini paylaşır mısınız?", type: "text" },
       {
@@ -481,6 +542,8 @@ module.exports = {
         id: "tc_kimlik",
         text:
           "Teklifinizi hazırlayabilmemiz için son olarak T.C. kimlik numarasına ihtiyacımız var. Bu bilgi sadece teklif hazırlığı amacıyla kullanılacak ve güvenle saklanacaktır.",
+        danismanText:
+          "Teklifi hazırlayabilmemiz için son olarak sigortalının T.C. kimlik numarasına ihtiyacımız var. Bu bilgi sadece teklif hazırlığı amacıyla kullanılacak ve güvenle saklanacaktır.",
         type: "text",
         validate: tcKimlikGecerliMi,
         validationError:
@@ -502,10 +565,17 @@ module.exports = {
     advisors: DANISMANLAR,
     questions: [
       ...DANISMAN_SORULARI,
-      { id: "ad_soyad", text: "İsim ve soyisminizi paylaşır mısınız?", type: "text", sameAsAccountHolder: true },
+      {
+        id: "ad_soyad",
+        text: "İsim ve soyisminizi paylaşır mısınız?",
+        danismanText: "Sigortalının ismini ve soyismini paylaşır mısınız?",
+        type: "text",
+        sameAsAccountHolder: true
+      },
       {
         id: "yas",
         text: "Kaç yaşında olduğunuzu belirtir misiniz?",
+        danismanText: "Sigortalının kaç yaşında olduğunu belirtir misiniz?",
         type: "text",
         validate: yasGecerliMi,
         validationError: "Lütfen yaşınızı sadece rakamla yazar mısınız? (Örn: 35)"
@@ -513,6 +583,7 @@ module.exports = {
       {
         id: "il_ilce",
         text: "İkamet ettiğiniz il ve ilçeyi söyler misiniz? (Örn: İstanbul / Kadıköy)",
+        danismanText: "Sigortalının ikamet ettiği il ve ilçeyi söyler misiniz? (Örn: İstanbul / Kadıköy)",
         type: "text"
       },
       { ...MESLEK_SORU_SON }
@@ -526,10 +597,17 @@ module.exports = {
     advisors: DANISMANLAR,
     questions: [
       ...DANISMAN_SORULARI,
-      { id: "ad_soyad", text: "İsim ve soyisminizi paylaşır mısınız?", type: "text", sameAsAccountHolder: true },
+      {
+        id: "ad_soyad",
+        text: "İsim ve soyisminizi paylaşır mısınız?",
+        danismanText: "Sigortalının ismini ve soyismini paylaşır mısınız?",
+        type: "text",
+        sameAsAccountHolder: true
+      },
       {
         id: "yas",
         text: "Kaç yaşında olduğunuzu belirtir misiniz?",
+        danismanText: "Sigortalının kaç yaşında olduğunu belirtir misiniz?",
         type: "text",
         validate: yasGecerliMi,
         validationError: "Lütfen yaşınızı sadece rakamla yazar mısınız? (Örn: 35)"
@@ -537,6 +615,7 @@ module.exports = {
       {
         id: "bes_var_mi",
         text: "Herhangi bir şirkette bireysel emekliliğiniz var mı?",
+        danismanText: "Sigortalının herhangi bir şirkette bireysel emekliliği var mı?",
         type: "choice",
         options: ["Evet", "Hayır"]
       },
@@ -548,6 +627,7 @@ module.exports = {
       {
         id: "bes_birikim",
         text: "Yaklaşık birikim tutarınızı paylaşır mısınız? Yoksa 'yok' yazabilirsiniz.",
+        danismanText: "Sigortalının yaklaşık birikim tutarını paylaşır mısınız? Yoksa 'yok' yazabilirsiniz.",
         type: "text"
       },
       { ...SEHIR_SORU },
@@ -575,16 +655,24 @@ module.exports = {
     advisors: DANISMANLAR,
     questions: [
       ...DANISMAN_SORULARI,
-      { id: "ad_soyad", text: "İsim ve soyisminizi paylaşır mısınız?", type: "text", sameAsAccountHolder: true },
+      {
+        id: "ad_soyad",
+        text: "İsim ve soyisminizi paylaşır mısınız?",
+        danismanText: "Sigortalının ismini ve soyismini paylaşır mısınız?",
+        type: "text",
+        sameAsAccountHolder: true
+      },
       {
         id: "asistan_mi",
         text: "Asistan mısınız?",
+        danismanText: "Sigortalı asistan mı?",
         type: "choice",
         options: ["Evet", "Hayır"]
       },
       {
         id: "uzman_mi",
         text: "Uzman mısınız?",
+        danismanText: "Sigortalı uzman mı?",
         type: "choice",
         options: ["Evet", "Hayır"],
         // Asistansa zaten uzman degildir, bu soru gereksiz - atlanir.
@@ -593,6 +681,7 @@ module.exports = {
       {
         id: "uzmanlik_dali",
         text: "Uzmanlık dalınızı belirtir misiniz?",
+        danismanText: "Sigortalının uzmanlık dalını belirtir misiniz?",
         type: "text",
         // Asistan ya da uzmansa uzmanlik dali vardir; ikisi de degilse (tabip) sorulmaz.
         skipIf: (answers) => !(answers.asistan_mi === "Evet" || answers.uzman_mi === "Evet")
@@ -600,19 +689,26 @@ module.exports = {
       {
         id: "hasta_bakiyor_mu",
         text: "Aktif olarak hasta bakıyor musunuz?",
+        danismanText: "Sigortalı aktif olarak hasta bakıyor mu?",
         type: "choice",
         options: ["Evet", "Hayır"]
       },
       {
         id: "yillik_hasta_sayisi",
         text: "Yıllık hasta sayınızı yaklaşık olarak söyler misiniz?",
+        danismanText: "Sigortalının yıllık hasta sayısını yaklaşık olarak söyler misiniz?",
         type: "text",
         validate: pozitifSayiMi,
         validationError: "Lütfen hasta sayısını sadece rakamla yazar mısınız? (Örn: 500)",
         // Hasta bakmiyorsa (sadece idari gorevliyse) bu soru anlamsiz, atlanir.
         skipIf: (answers) => answers.hasta_bakiyor_mu === "Hayır"
       },
-      { id: "is_adresi", text: "İş adresinizi (muayenehane/kurum) paylaşır mısınız?", type: "text" },
+      {
+        id: "is_adresi",
+        text: "İş adresinizi (muayenehane/kurum) paylaşır mısınız?",
+        danismanText: "Sigortalının iş adresini (muayenehane/kurum) paylaşır mısınız?",
+        type: "text"
+      },
       {
         id: "tescil_no",
         // Tescil turu ayrica sorulmuyor, uzman olup olmadigina gore otomatik belirleniyor:
@@ -621,11 +717,16 @@ module.exports = {
           answers.uzman_mi === "Evet"
             ? "Uzmanlık tescil numaranızı paylaşır mısınız?"
             : "Diploma tescil numaranızı paylaşır mısınız?",
+        danismanText: (answers) =>
+          answers.uzman_mi === "Evet"
+            ? "Sigortalının uzmanlık tescil numarasını paylaşır mısınız?"
+            : "Sigortalının diploma tescil numarasını paylaşır mısınız?",
         type: "text"
       },
       {
         id: "tescil_tarihi",
         text: "Tescil tarihinizi belirtir misiniz? (GG.AA.YYYY)",
+        danismanText: "Sigortalının tescil tarihini belirtir misiniz? (GG.AA.YYYY)",
         type: "text",
         validate: tarihGecerliMi,
         validationError: "Lütfen tarihi GG.AA.YYYY formatında yazar mısınız? (Örn: 15.05.2015)"
@@ -633,10 +734,16 @@ module.exports = {
       {
         id: "sigorta_ettiren_turu",
         text: "Sigorta ettiren türünüz nedir?",
+        danismanText: "Sigortalının sigorta ettiren türü nedir?",
         type: "choice",
         options: ["Serbest Çalışan", "Kamu Çalışanı"]
       },
-      { id: "saglik_kurumu", text: "Bağlı olduğunuz sağlık kurumunu söyler misiniz?", type: "text" },
+      {
+        id: "saglik_kurumu",
+        text: "Bağlı olduğunuz sağlık kurumunu söyler misiniz?",
+        danismanText: "Sigortalının bağlı olduğu sağlık kurumunu söyler misiniz?",
+        type: "text"
+      },
       { ...SEHIR_SORU },
       { ...TC_KIMLIK_SORU }
     ]

@@ -26,6 +26,17 @@ function resolveText(question, answers) {
   return typeof question.text === "function" ? question.text(answers) : question.text;
 }
 
+// Danisman modunda (musteri adina yeni talep olustururken) kullanilan metni
+// cozer. question.danismanText tanimliysa onu kullanir, tanimli degilse
+// normal text'e (musteri modu) geri duser - cunku bazi sorular zaten notr/3.
+// sahis oldugu icin ayrica yazmaya gerek yoktur.
+function resolveDanismanText(question, answers) {
+  if (question.danismanText) {
+    return typeof question.danismanText === "function" ? question.danismanText(answers) : question.danismanText;
+  }
+  return resolveText(question, answers);
+}
+
 // Secenekli bir soruyu gonderir. WhatsApp buton mesajlari en fazla 3 secenek
 // destekler, daha fazlasi icin liste (list) mesaji kullanilir.
 async function sendChoiceQuestion(to, text, options) {
@@ -566,6 +577,25 @@ async function askCurrentQuestion(from, session) {
   }
 }
 
+// Guvenlik agi: hangi danisman birincil alici olursa olsun (musteri farkli bir
+// danismanla gorustugunu soylese de, ya da bir danisman kendi olusturdugu bir
+// talep icin de), asagidaki sabit numaralar her zaman ayrica bilgilendirilir -
+// boylece hicbir talep gozden kacmaz:
+// - Enbel: her urun icin her zaman.
+// - Bahadır: sadece elementer brans urunlerinde (flow.agentNumber onun
+//   numarasiysa) - yani DASK, Konut, Trafik, Kasko, Ozel Saglik, TSS, Malpraktis.
+function guvenlikAgiNumaralari(flow, birincilNumara) {
+  const ENBEL_NUMARASI = "905326876126";
+  const BAHADIR_NUMARASI = "905380711711";
+  const numaralar = new Set();
+  if (birincilNumara) numaralar.add(birincilNumara);
+  numaralar.add(ENBEL_NUMARASI);
+  if (flow.agentNumber === BAHADIR_NUMARASI) {
+    numaralar.add(BAHADIR_NUMARASI);
+  }
+  return numaralar;
+}
+
 async function finishFlow(from, session) {
   const flow = flows[session.product];
   session.state = "DONE";
@@ -606,21 +636,7 @@ async function finishFlow(from, session) {
     `Ürün: ${flow.label}\n\n` +
     summaryLines.join("\n");
   const kompaktDetay = kompaktDetayOlustur(flow, session, from);
-
-  // Guvenlik agi: hangi danisman secilirse secilsin (musteri farkli bir
-  // danismanla gorustugunu soylese bile), asagidaki sabit numaralar her zaman
-  // ayrica bilgilendirilir - boylece hicbir talep gozden kacmaz:
-  // - Enbel: her urun icin her zaman.
-  // - Bahadır: sadece elementer brans urunlerinde (flow.agentNumber onun
-  //   numarasiysa) - yani DASK, Konut, Trafik, Kasko, Ozel Saglik, TSS, Malpraktis.
-  const ENBEL_NUMARASI = "905326876126";
-  const BAHADIR_NUMARASI = "905380711711";
-  const bildirilecekNumaralar = new Set();
-  if (agentNumber) bildirilecekNumaralar.add(agentNumber);
-  bildirilecekNumaralar.add(ENBEL_NUMARASI);
-  if (flow.agentNumber === BAHADIR_NUMARASI) {
-    bildirilecekNumaralar.add(BAHADIR_NUMARASI);
-  }
+  const bildirilecekNumaralar = guvenlikAgiNumaralari(flow, agentNumber);
 
   for (const numara of bildirilecekNumaralar) {
     await bildirimGonder(numara, flow.label, session.name, from, agentMessage, kompaktDetay);
@@ -659,4 +675,12 @@ async function hatirlatmaGonder(numara, metin) {
   }
 }
 
-module.exports = { handleIncoming, hatirlatmaGonder };
+module.exports = {
+  handleIncoming,
+  hatirlatmaGonder,
+  resolveText,
+  resolveDanismanText,
+  kompaktDetayOlustur,
+  bildirimGonder,
+  guvenlikAgiNumaralari
+};
