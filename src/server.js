@@ -186,40 +186,62 @@ function panelAuth(req, res, next) {
 
 // OTP dogrulama sayfasi: kod uretir, WhatsApp'tan (girisi yapanin KENDI
 // numarasina) gonderir, girisi bekler.
+// Ayni kullanici icin kisa surede (OTP_COOLDOWN_MS) art arda kod uretilip
+// gonderilmesini engeller - bazi tarayicilarin/aglarin ayni sayfaya art arda
+// iki istek atmasi (cift yukleme, otomatik yeniden deneme vb.) yuzunden iki
+// farkli kodun peş peşe gonderilmesini onlemek icin.
+const OTP_COOLDOWN_MS = 20 * 1000;
+const sonKodGonderimZamani = new Map(); // kullaniciAdi -> zaman damgasi
+
 app.get("/panel/dogrula", sadeceSifreGerekli, async (req, res) => {
   const kullanici = req.panelKullanici;
   let denemeToken = cookieOku(req, "panel_deneme");
   let deneme = denemeToken && otpDenemeleri.get(denemeToken);
+  const gecerliDenemeVar = deneme && deneme.expiresAt >= Date.now() && deneme.kullaniciAdi === kullanici.kullaniciAdi;
 
-  if (!deneme || deneme.expiresAt < Date.now() || deneme.kullaniciAdi !== kullanici.kullaniciAdi) {
-    const kod = altiHaneliKod();
-    denemeToken = rastgeleToken();
-    deneme = { kod, expiresAt: Date.now() + OTP_GECERLILIK_MS, kullaniciAdi: kullanici.kullaniciAdi };
-    otpDenemeleri.set(denemeToken, deneme);
-    cookieYaz(res, "panel_deneme", denemeToken, OTP_GECERLILIK_MS);
+  if (!gecerliDenemeVar) {
+    const sonGonderim = sonKodGonderimZamani.get(kullanici.kullaniciAdi) || 0;
+    const kisaSureOnceGonderildiMi = Date.now() - sonGonderim < OTP_COOLDOWN_MS;
 
-    const kodMesaji = `🔐 WE Sigorta paneline giriş doğrulama kodunuz: ${kod}\n\nBu kod 5 dakika geçerlidir.`;
-    // Onceki deneyimlerimizden biliyoruz ki danismanlar bot numarasina kendileri
-    // yazmadigi surece 24 saatlik pencere kapali olabiliyor ve duz metin
-    // (sendText) sessizce ulasmayabiliyor. Bu yuzden once (varsa) onayli
-    // sablonu deniyoruz - sablonlar bu pencereye tabi degil, her zaman ulasir.
-    const detayliSablonAdi = process.env.AGENT_DETAY_TEMPLATE_NAME;
-    let sablonBasarili = false;
-    if (detayliSablonAdi) {
-      try {
-        await sendTemplate(kullanici.telefon, detayliSablonAdi, "tr", { detay: sablonParametresiIcinTemizle(kodMesaji) }, kodMesaji);
-        sablonBasarili = true;
-      } catch (err) {
-        console.error("2FA sablon mesaji gonderilemedi:", err?.response?.data || err.message);
+    if (!kisaSureOnceGonderildiMi) {
+      const kod = altiHaneliKod();
+      denemeToken = rastgeleToken();
+      deneme = { kod, expiresAt: Date.now() + OTP_GECERLILIK_MS, kullaniciAdi: kullanici.kullaniciAdi };
+      otpDenemeleri.set(denemeToken, deneme);
+      cookieYaz(res, "panel_deneme", denemeToken, OTP_GECERLILIK_MS);
+      sonKodGonderimZamani.set(kullanici.kullaniciAdi, Date.now());
+
+      console.log(
+        `2FA kodu uretildi: kullanici=${kullanici.kullaniciAdi} (${kullanici.ad}) telefon=${kullanici.telefon}`
+      );
+
+      const kodMesaji = `🔐 WE Sigorta paneline giriş doğrulama kodunuz: ${kod}\n\nBu kod 5 dakika geçerlidir.`;
+      // Onceki deneyimlerimizden biliyoruz ki danismanlar bot numarasina kendileri
+      // yazmadigi surece 24 saatlik pencere kapali olabiliyor ve duz metin
+      // (sendText) sessizce ulasmayabiliyor. Bu yuzden once (varsa) onayli
+      // sablonu deniyoruz - sablonlar bu pencereye tabi degil, her zaman ulasir.
+      const detayliSablonAdi = process.env.AGENT_DETAY_TEMPLATE_NAME;
+      let sablonBasarili = false;
+      if (detayliSablonAdi) {
+        try {
+          await sendTemplate(kullanici.telefon, detayliSablonAdi, "tr", { detay: sablonParametresiIcinTemizle(kodMesaji) }, kodMesaji);
+          sablonBasarili = true;
+        } catch (err) {
+          console.error("2FA sablon mesaji gonderilemedi:", err?.response?.data || err.message);
+        }
       }
-    }
 
-    if (!sablonBasarili) {
-      try {
-        await sendText(kullanici.telefon, kodMesaji);
-      } catch (err) {
-        console.error("2FA kodu gonderilemedi:", err?.response?.data || err.message);
+      if (!sablonBasarili) {
+        try {
+          await sendText(kullanici.telefon, kodMesaji);
+        } catch (err) {
+          console.error("2FA kodu gonderilemedi:", err?.response?.data || err.message);
+        }
       }
+    } else {
+      console.log(
+        `2FA kodu ATLANDI (${OTP_COOLDOWN_MS / 1000} sn icinde tekrar istek): kullanici=${kullanici.kullaniciAdi}`
+      );
     }
   }
 
