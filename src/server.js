@@ -181,12 +181,12 @@ function panelAuth(req, res, next) {
   }
 
   // Sifre dogru ama bu tarayici henuz OTP ile dogrulanmamis - dogrulama sayfasina yonlendir.
-  return res.redirect(302, "/wesigorta-crm/dogrula");
+  return res.redirect(302, "/panel/dogrula");
 }
 
 // OTP dogrulama sayfasi: kod uretir, WhatsApp'tan (girisi yapanin KENDI
 // numarasina) gonderir, girisi bekler.
-app.get("/wesigorta-crm/dogrula", sadeceSifreGerekli, async (req, res) => {
+app.get("/panel/dogrula", sadeceSifreGerekli, async (req, res) => {
   const kullanici = req.panelKullanici;
   let denemeToken = cookieOku(req, "panel_deneme");
   let deneme = denemeToken && otpDenemeleri.get(denemeToken);
@@ -220,7 +220,7 @@ app.get("/wesigorta-crm/dogrula", sadeceSifreGerekli, async (req, res) => {
     </head><body>
       <h2>🔐 Giriş Doğrulama</h2>
       <p>Merhaba ${escapeHtmlSunucu(kullanici.ad)}! WhatsApp'ınıza gönderilen 6 haneli kodu girin.</p>
-      <form method="POST" action="/wesigorta-crm/dogrula">
+      <form method="POST" action="/panel/dogrula">
         <input type="text" name="kod" maxlength="6" inputmode="numeric" autofocus required />
         <br/><button type="submit">Doğrula</button>
       </form>
@@ -229,7 +229,7 @@ app.get("/wesigorta-crm/dogrula", sadeceSifreGerekli, async (req, res) => {
   `);
 });
 
-app.post("/wesigorta-crm/dogrula", sadeceSifreGerekli, (req, res) => {
+app.post("/panel/dogrula", sadeceSifreGerekli, (req, res) => {
   const kullanici = req.panelKullanici;
   const denemeToken = cookieOku(req, "panel_deneme");
   const deneme = denemeToken && otpDenemeleri.get(denemeToken);
@@ -241,7 +241,7 @@ app.post("/wesigorta-crm/dogrula", sadeceSifreGerekli, (req, res) => {
     deneme.kullaniciAdi !== kullanici.kullaniciAdi ||
     girilenKod !== deneme.kod
   ) {
-    return res.redirect(302, "/wesigorta-crm/dogrula?hata=1");
+    return res.redirect(302, "/panel/dogrula?hata=1");
   }
 
   otpDenemeleri.delete(denemeToken);
@@ -251,17 +251,17 @@ app.post("/wesigorta-crm/dogrula", sadeceSifreGerekli, (req, res) => {
     kullaniciAdi: kullanici.kullaniciAdi
   });
   cookieYaz(res, "panel_oturum", oturumToken, OTURUM_GECERLILIK_MS);
-  res.redirect(302, "/wesigorta-crm");
+  res.redirect(302, "/panel");
 });
 
 // --- Temsilci paneli sayfasi ve API'leri ---
-app.get("/wesigorta-crm", panelAuth, (req, res) => {
+app.get("/panel", panelAuth, (req, res) => {
   res.sendFile(path.join(__dirname, "panel.html"));
 });
 
-// Eski link/yer imleri kirilmasin diye "/panel" adresine gelenleri yeni adrese yonlendirir.
-app.get("/panel", (req, res) => {
-  res.redirect(302, "/wesigorta-crm");
+// Deploy sirasinda kisa sureli kullanilan eski yol - yer imleri kirilmasin diye yonlendirir.
+app.get("/wesigorta-crm", (req, res) => {
+  res.redirect(302, "/panel");
 });
 
 app.get("/api/panel/conversations", panelAuth, (req, res) => {
