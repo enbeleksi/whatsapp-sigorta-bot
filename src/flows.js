@@ -87,14 +87,18 @@ const RUHSAT_SAHIBI_TC_SORU = {
 // Ruhsat belge seri no, ruhsatin sag alt kosesinde yer alir; harflerle baslayip
 // rakamlarla devam eder (orn. "AE123456"). Metin zaten notr (kimseye ait "-nız"
 // eki yok), danisman modunda da aynen kullanilabilir.
+// fotoIleAlinabilir: true - musteri isterse yazmak yerine ruhsatin fotografini
+// gonderebilir, Claude'un gorsel analiziyle seri no otomatik okunur (bkz.
+// ruhsatAnaliz.js). Metinle cevaplama da her zaman calismaya devam eder.
 const RUHSAT_SERI_NO_SORU = {
   id: "ruhsat_seri_no",
   text:
-    "Ruhsat belge seri numarasını belirtir misiniz? (Ruhsatın sağ alt köşesinde yer alan, harflerle başlayıp rakamlarla devam eden seri numarasıdır. Örn: AE123456)",
+    "Ruhsat belge seri numarasını belirtir misiniz? (Ruhsatın sağ alt köşesinde yer alan, harflerle başlayıp rakamlarla devam eden seri numarasıdır. Örn: AE123456) İsterseniz yazmak yerine ruhsatın fotoğrafını da gönderebilirsiniz, sizin için okuruz. 📸",
   type: "text",
   validate: ruhsatSeriNoGecerliMi,
   validationError:
-    "Lütfen ruhsat seri numarasını doğru formatta yazar mısınız? Harflerle başlayıp rakamlarla devam etmesi gerekiyor. (Örn: AE123456)"
+    "Lütfen ruhsat seri numarasını doğru formatta yazar mısınız? Harflerle başlayıp rakamlarla devam etmesi gerekiyor. (Örn: AE123456)",
+  fotoIleAlinabilir: true
 };
 
 // Sehir cevabinda Turkce karakter farkliliklarini (ı/i, ş/s, ğ/g, ü/u, ö/o, ç/c)
@@ -449,6 +453,28 @@ module.exports = {
         validationError: "Lütfen plakayı doğru formatta yazar mısınız? (Örn: 34 ABC 123)"
       },
       { ...RUHSAT_SERI_NO_SORU },
+      {
+        id: "kasko_durumu",
+        text: "Kaskonuzu düzenli olarak her yıl yeniliyor musunuz, yoksa bir süredir kaskosuz mu kullanıyorsunuz?",
+        danismanText:
+          "Sigortalı kaskosunu düzenli olarak her yıl yeniliyor mu, yoksa bir süredir kaskosuz mu?",
+        type: "choice",
+        options: ["Düzenli Yeniliyorum", "Bir Süredir Kaskosuzum"]
+      },
+      {
+        id: "arac_fotograflari",
+        text:
+          "Bir süredir kaskonuz olmadığı için sigorta şirketleri aracınızın güncel halini görmek istiyor. " +
+          "Lütfen aracınızın her yönünden (ön, arka, sağ, sol) birer fotoğraf çeker misiniz? Ayrıca ön camdan " +
+          "görünen şasi numarasının fotoğrafını da ekleyin - plakanın fotoğraflarda net görünmesine dikkat edin. " +
+          "Tüm fotoğrafları gönderdikten sonra \"tamam\" yazmanız yeterli. 📸",
+        danismanText:
+          "Sigortalının kaskosu bir süredir olmadığı için aracın güncel halini gösteren fotoğraflar gerekiyor. " +
+          "Aracın her yönünden (ön, arka, sağ, sol) birer fotoğraf, ayrıca ön camdan görünen şasi numarasının " +
+          "fotoğrafını gönderir misiniz? Plaka fotoğraflarda net görünsün. Bitirince \"tamam\" yazmanız yeterli. 📸",
+        type: "coklu_foto",
+        skipIf: (answers) => answers.kasko_durumu !== "Bir Süredir Kaskosuzum"
+      },
       { ...SEHIR_SORU },
       { ...MESLEK_SORU },
       { ...RUHSAT_SAHIBI_TC_SORU }

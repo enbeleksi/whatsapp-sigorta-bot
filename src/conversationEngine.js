@@ -1,5 +1,6 @@
 const { getSession, resetSession } = require("./sessionStore");
-const { sendText, sendButtons, sendList, sendTemplate } = require("./loggedWhatsapp");
+const { sendText, sendButtons, sendList, sendTemplate, mediaIndir } = require("./loggedWhatsapp");
+const { ruhsatFotografiAnalizEt } = require("./ruhsatAnaliz");
 const messageLog = require("./messageLog");
 const leadStore = require("./leadStore");
 const flows = require("./flows");
@@ -198,6 +199,8 @@ const ID_KISA_ETIKET = {
   dairenin_bulundugu_kat: "Daire Katı",
   meslek: "Meslek",
   tc_kimlik: "TC",
+  kasko_durumu: "Kasko Durumu",
+  arac_fotograflari: "Araç Fotoğrafları",
   plaka: "Plaka",
   ruhsat_seri_no: "Ruhsat Seri No",
   sehir: "Şehir",
@@ -225,11 +228,21 @@ const ID_KISA_ETIKET = {
 // Danismana WhatsApp sablonu icinde (tek bir degiskene sigacak sekilde) gonderilecek
 // kompakt ozet metnini olusturur. Satir arasi degil " • " ile ayrilir, cunku sablon
 // degiskenlerinde alt satira gecme karakteri sorun cikarabiliyor.
+// Bir cevabi okunabilir metne cevirir. Coklu fotograf sorularinda cevap bir
+// dizi (foto nesneleri) oldugu icin, ham degeri yazdirmak yerine "X fotoğraf
+// eklendi" gibi kisa bir aciklama doner.
+function cevabiMetneCevir(deger) {
+  if (Array.isArray(deger)) {
+    return deger.length > 0 ? `${deger.length} fotoğraf eklendi 📸` : "(fotoğraf eklenmedi)";
+  }
+  return deger;
+}
+
 function kompaktDetayOlustur(flow, session, telefon) {
   const askedQuestions = flow.questions.filter((q) => !(q.skipIf && q.skipIf(session.answers)));
   const alanlar = askedQuestions.map((q) => {
     const etiket = ID_KISA_ETIKET[q.id] || q.id;
-    return `${etiket}: ${session.answers[q.id]}`;
+    return `${etiket}: ${cevabiMetneCevir(session.answers[q.id])}`;
   });
   return (
     `${flow.label} • Müşteri: ${session.name} • Telefon: ${telefon} • ` + alanlar.join(" • ")
@@ -323,6 +336,92 @@ async function handleIncoming(from, message) {
   // Bot duraklatilmissa (temsilci devraldiysa) hicbir otomatik islem yapma,
   // sadece mesaji panelde gorunecek sekilde kaydet ve cik.
   if (session.paused) {
+    return;
+  }
+
+  // Musteri bir fotograf/belge gonderdiyse: su anki soru "coklu_foto" tipindeyse
+  // (orn. kasko arac fotograflari) ya da "fotoIleAlinabilir" ozelligine
+  // sahipse (orn. ruhsat seri no) kabul edilir, aksi halde nazikce "su an
+  // fotograf beklemiyoruz" denir.
+  if (message.type === "media") {
+    const flow = session.product ? flows[session.product] : null;
+    const currentQuestion = session.state === "ASKING" && flow ? flow.questions[session.questionIndex] : null;
+    const fotoKabulEdilir =
+      currentQuestion && (currentQuestion.type === "coklu_foto" || currentQuestion.fotoIleAlinabilir);
+
+    if (!fotoKabulEdilir) {
+      await sendText(
+        from,
+        "Şu an bir fotoğraf beklemiyoruz, iletmek istediğiniz bilgiyi yazılı olarak paylaşabilir misiniz? 🙏"
+      );
+      return;
+    }
+
+    if (!message.mimeType || !message.mimeType.startsWith("image/")) {
+      await sendText(from, "Lütfen sadece fotoğraf gönderin (belge/PDF değil).");
+      return;
+    }
+
+    // --- Ruhsat foto analizi (Claude gorsel analiziyle seri no okuma) ---
+    if (currentQuestion.fotoIleAlinabilir) {
+      try {
+        const { buffer, mimeType } = await mediaIndir(message.mediaId);
+        await sendText(from, "Fotoğrafınızı inceliyorum, bir saniye... 🔍");
+        const sonuc = await ruhsatFotografiAnalizEt(buffer, message.mimeType || mimeType);
+
+        if (sonuc.okunabilir && sonuc.seriNo && currentQuestion.validate(sonuc.seriNo)) {
+          session.answers[currentQuestion.id] = sonuc.seriNo.toUpperCase();
+          // Fotografin kendisini de saklayip, talep olusunca belge olarak ekleyecegiz
+          // (danisman gerekirse gozle de kontrol edebilsin diye).
+          if (!session.ekBelgeler) session.ekBelgeler = [];
+          session.ekBelgeler.push({
+            dosyaAdi: "ruhsat.jpg",
+            mimeType: message.mimeType || mimeType,
+            veriBase64: buffer.toString("base64")
+          });
+          await sendText(from, `Ruhsat seri numaranızı *${sonuc.seriNo.toUpperCase()}* olarak okudum ✅`);
+          session.questionIndex = nextValidIndex(flow, session.answers, session.questionIndex + 1);
+          if (session.questionIndex >= flow.questions.length) {
+            await finishFlow(from, session);
+          } else {
+            await askCurrentQuestion(from, session);
+          }
+        } else {
+          await sendText(
+            from,
+            `Fotoğrafı net okuyamadım 😕 ${sonuc.aciklama || ""}\n\n` +
+              "Ruhsatın sağ alt köşesindeki seri numarasının tamamı görünecek şekilde, iyi ışıkta tekrar bir " +
+              "fotoğraf çeker misiniz? İsterseniz seri numarasını yazarak da girebilirsiniz."
+          );
+        }
+      } catch (err) {
+        console.error("Ruhsat foto analizi hatasi:", err?.response?.data || err.message);
+        await sendText(
+          from,
+          "Fotoğrafı analiz ederken bir sorun oluştu 🙏 Lütfen tekrar deneyin, ya da seri numarasını yazarak girebilirsiniz."
+        );
+      }
+      return;
+    }
+
+    // --- Coklu fotograf toplama (orn. kasko arac fotograflari) ---
+    try {
+      const { buffer, mimeType } = await mediaIndir(message.mediaId);
+      if (!session.answers[currentQuestion.id]) session.answers[currentQuestion.id] = [];
+      session.answers[currentQuestion.id].push({
+        dosyaAdi: message.dosyaAdi || `foto_${session.answers[currentQuestion.id].length + 1}.jpg`,
+        mimeType: message.mimeType || mimeType,
+        veriBase64: buffer.toString("base64")
+      });
+      const sayi = session.answers[currentQuestion.id].length;
+      await sendText(
+        from,
+        `📸 Fotoğraf alındı (${sayi}. fotoğraf). Başka fotoğraf gönderebilirsiniz, bitirdiyseniz "tamam" yazabilirsiniz.`
+      );
+    } catch (err) {
+      console.error("Foto indirilemedi:", err?.response?.data || err.message);
+      await sendText(from, "Fotoğrafı kaydederken bir sorun oluştu, tekrar gönderir misiniz?");
+    }
     return;
   }
 
@@ -524,6 +623,34 @@ async function handleIncoming(from, message) {
       const currentQuestion = flow.questions[session.questionIndex];
       const currentText = resolveText(currentQuestion, session.answers);
 
+      // Coklu fotograf sorusu (orn. kasko arac fotograflari): musteri fotograf
+      // gonderdikce ust taraftaki "media" blogu bunlari zaten biriktiriyor.
+      // Burada sadece musterinin "tamam/bitti" gibi bir kelimeyle bitirdigini
+      // anlayip bir sonraki soruya geciyoruz.
+      if (currentQuestion.type === "coklu_foto") {
+        const BITIRME_KELIMELERI = ["tamam", "bitti", "gonderdim", "hepsi bu", "tamamdir", "bu kadar"];
+        const bitirdiMi = BITIRME_KELIMELERI.some((k) => normalizedUserText.includes(k));
+        if (!bitirdiMi) {
+          await sendText(
+            from,
+            "Fotoğraf gönderebilirsiniz, bitirdiyseniz \"tamam\" yazmanız yeterli. 📸"
+          );
+          break;
+        }
+        const cekilenSayisi = (session.answers[currentQuestion.id] || []).length;
+        if (cekilenSayisi === 0) {
+          await sendText(from, "Devam edebilmemiz için en az bir fotoğraf göndermeniz gerekiyor. 📸");
+          break;
+        }
+        session.questionIndex = nextValidIndex(flow, session.answers, session.questionIndex + 1);
+        if (session.questionIndex >= flow.questions.length) {
+          await finishFlow(from, session);
+        } else {
+          await askCurrentQuestion(from, session);
+        }
+        break;
+      }
+
       // Secenekli soruda gecerli bir secenek secildi mi kontrol et (esnek eslestirme ile)
       if (currentQuestion.type === "choice") {
         const validOption = matchOption(userText, currentQuestion.options);
@@ -650,7 +777,7 @@ async function finishFlow(from, session) {
   const askedQuestions = flow.questions.filter((q) => !(q.skipIf && q.skipIf(session.answers)));
   const summaryLines = askedQuestions.map((q) => {
     const questionText = resolveText(q, session.answers);
-    return `- ${questionText.replace(/\?$/, "")}: ${session.answers[q.id]}`;
+    return `- ${questionText.replace(/\?$/, "")}: ${cevabiMetneCevir(session.answers[q.id])}`;
   });
   // Bazi urunlerde (orn. Malpraktis'te hekimlere) soyisim olmadan, sadece isim
   // + "Hocam" diye hitap ediyoruz. flow.hitapHocam true ise bunu uygula.
@@ -690,7 +817,7 @@ async function finishFlow(from, session) {
   // Talebi takip sistemine kaydet - danisman panelden durumunu
   // (Bekliyor/Takipte/Olumlu/Olumsuz) guncelleyebilecek, hatirlatma kurabilecek.
   const atananDanisman = flow.advisors && flow.advisors.find((a) => a.number === agentNumber);
-  leadStore.yeniLeadOlustur({
+  const yeniLead = leadStore.yeniLeadOlustur({
     telefon: from,
     musteriAdi: session.name,
     urun: flow.label,
@@ -698,6 +825,22 @@ async function finishFlow(from, session) {
     danismanNumarasi: agentNumber || null,
     ozet: kompaktDetay
   });
+
+  // Musteriden coklu_foto tipi bir soruda fotograf toplandiysa (orn. kasko
+  // arac fotograflari), bunlari da talebe belge olarak ekliyoruz.
+  askedQuestions
+    .filter((q) => q.type === "coklu_foto")
+    .forEach((q) => {
+      const fotograflar = session.answers[q.id];
+      if (Array.isArray(fotograflar)) {
+        fotograflar.forEach((foto) => leadStore.belgeEkle(yeniLead.id, foto));
+      }
+    });
+
+  // Basariyla okunan ruhsat fotografi gibi ek belgeler varsa onlari da ekle.
+  if (Array.isArray(session.ekBelgeler)) {
+    session.ekBelgeler.forEach((belge) => leadStore.belgeEkle(yeniLead.id, belge));
+  }
 }
 
 // Panelden kurulan bir hatirlatmanin zamani geldiginde danismana gonderilir.

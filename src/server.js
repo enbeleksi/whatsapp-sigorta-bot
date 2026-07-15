@@ -509,10 +509,10 @@ app.post("/webhook", async (req, res) => {
     if (parsed) {
       if (advisorEngine.isDanisman(from)) {
         await advisorEngine.handleAdvisorMessage(from, parsed);
-      } else if (parsed.type === "media") {
-        // Musteri tarafinda foto/belge alma henuz desteklenmiyor - bilgilendirip geciyoruz.
-        await sendText(from, "Şu an fotoğraf/belge alamıyoruz, iletmek istediğiniz bilgiyi yazılı olarak paylaşabilir misiniz? 🙏");
       } else {
+        // Musteri tarafinda foto/belge kabulu artik baglama gore (orn. kasko
+        // arac fotograflari, ruhsat fotografi bekleniyorsa) handleIncoming
+        // icinde karar veriliyor - burada blanket red yok.
         await handleIncoming(from, parsed);
       }
     }
