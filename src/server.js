@@ -181,12 +181,12 @@ function panelAuth(req, res, next) {
   }
 
   // Sifre dogru ama bu tarayici henuz OTP ile dogrulanmamis - dogrulama sayfasina yonlendir.
-  return res.redirect(302, "/panel/dogrula");
+  return res.redirect(302, "/wesigorta-crm/dogrula");
 }
 
 // OTP dogrulama sayfasi: kod uretir, WhatsApp'tan (girisi yapanin KENDI
 // numarasina) gonderir, girisi bekler.
-app.get("/panel/dogrula", sadeceSifreGerekli, async (req, res) => {
+app.get("/wesigorta-crm/dogrula", sadeceSifreGerekli, async (req, res) => {
   const kullanici = req.panelKullanici;
   let denemeToken = cookieOku(req, "panel_deneme");
   let deneme = denemeToken && otpDenemeleri.get(denemeToken);
@@ -210,17 +210,17 @@ app.get("/panel/dogrula", sadeceSifreGerekli, async (req, res) => {
 
   res.send(`
     <!DOCTYPE html>
-    <html lang="tr"><head><meta charset="utf-8"><title>Doğrulama</title>
+    <html lang="tr"><head><meta charset="utf-8"><title>WE Sigorta CRM - Doğrulama</title>
     <style>
       body { font-family: -apple-system, Segoe UI, Arial, sans-serif; max-width: 360px; margin: 80px auto; text-align: center; color: #333; }
       input { font-size: 22px; padding: 10px; width: 160px; text-align: center; letter-spacing: 6px; border: 1px solid #ccc; border-radius: 6px; }
-      button { font-size: 15px; padding: 10px 24px; margin-top: 14px; background: #075E54; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
+      button { font-size: 15px; padding: 10px 24px; margin-top: 14px; background: #16324F; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
       .hata { color: #c00; margin-top: 10px; font-size: 13px; }
     </style>
     </head><body>
       <h2>🔐 Giriş Doğrulama</h2>
       <p>Merhaba ${escapeHtmlSunucu(kullanici.ad)}! WhatsApp'ınıza gönderilen 6 haneli kodu girin.</p>
-      <form method="POST" action="/panel/dogrula">
+      <form method="POST" action="/wesigorta-crm/dogrula">
         <input type="text" name="kod" maxlength="6" inputmode="numeric" autofocus required />
         <br/><button type="submit">Doğrula</button>
       </form>
@@ -229,7 +229,7 @@ app.get("/panel/dogrula", sadeceSifreGerekli, async (req, res) => {
   `);
 });
 
-app.post("/panel/dogrula", sadeceSifreGerekli, (req, res) => {
+app.post("/wesigorta-crm/dogrula", sadeceSifreGerekli, (req, res) => {
   const kullanici = req.panelKullanici;
   const denemeToken = cookieOku(req, "panel_deneme");
   const deneme = denemeToken && otpDenemeleri.get(denemeToken);
@@ -241,7 +241,7 @@ app.post("/panel/dogrula", sadeceSifreGerekli, (req, res) => {
     deneme.kullaniciAdi !== kullanici.kullaniciAdi ||
     girilenKod !== deneme.kod
   ) {
-    return res.redirect(302, "/panel/dogrula?hata=1");
+    return res.redirect(302, "/wesigorta-crm/dogrula?hata=1");
   }
 
   otpDenemeleri.delete(denemeToken);
@@ -251,12 +251,17 @@ app.post("/panel/dogrula", sadeceSifreGerekli, (req, res) => {
     kullaniciAdi: kullanici.kullaniciAdi
   });
   cookieYaz(res, "panel_oturum", oturumToken, OTURUM_GECERLILIK_MS);
-  res.redirect(302, "/panel");
+  res.redirect(302, "/wesigorta-crm");
 });
 
 // --- Temsilci paneli sayfasi ve API'leri ---
-app.get("/panel", panelAuth, (req, res) => {
+app.get("/wesigorta-crm", panelAuth, (req, res) => {
   res.sendFile(path.join(__dirname, "panel.html"));
+});
+
+// Eski link/yer imleri kirilmasin diye "/panel" adresine gelenleri yeni adrese yonlendirir.
+app.get("/panel", (req, res) => {
+  res.redirect(302, "/wesigorta-crm");
 });
 
 app.get("/api/panel/conversations", panelAuth, (req, res) => {
