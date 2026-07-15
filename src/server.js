@@ -5,7 +5,7 @@ const path = require("path");
 const multer = require("multer");
 const { handleIncoming, hatirlatmaGonder } = require("./conversationEngine");
 const advisorEngine = require("./advisorEngine");
-const { sendText, sendDocument } = require("./loggedWhatsapp");
+const { sendText, sendDocument, sendTemplate } = require("./loggedWhatsapp");
 const messageLog = require("./messageLog");
 const leadStore = require("./leadStore");
 const dokumanStore = require("./dokumanStore");
@@ -198,13 +198,28 @@ app.get("/panel/dogrula", sadeceSifreGerekli, async (req, res) => {
     otpDenemeleri.set(denemeToken, deneme);
     cookieYaz(res, "panel_deneme", denemeToken, OTP_GECERLILIK_MS);
 
-    try {
-      await sendText(
-        kullanici.telefon,
-        `🔐 WE Sigorta paneline giriş doğrulama kodunuz: ${kod}\n\nBu kod 5 dakika geçerlidir.`
-      );
-    } catch (err) {
-      console.error("2FA kodu gonderilemedi:", err?.response?.data || err.message);
+    const kodMesaji = `🔐 WE Sigorta paneline giriş doğrulama kodunuz: ${kod}\n\nBu kod 5 dakika geçerlidir.`;
+    // Onceki deneyimlerimizden biliyoruz ki danismanlar bot numarasina kendileri
+    // yazmadigi surece 24 saatlik pencere kapali olabiliyor ve duz metin
+    // (sendText) sessizce ulasmayabiliyor. Bu yuzden once (varsa) onayli
+    // sablonu deniyoruz - sablonlar bu pencereye tabi degil, her zaman ulasir.
+    const detayliSablonAdi = process.env.AGENT_DETAY_TEMPLATE_NAME;
+    let sablonBasarili = false;
+    if (detayliSablonAdi) {
+      try {
+        await sendTemplate(kullanici.telefon, detayliSablonAdi, "tr", { detay: kodMesaji }, kodMesaji);
+        sablonBasarili = true;
+      } catch (err) {
+        console.error("2FA sablon mesaji gonderilemedi:", err?.response?.data || err.message);
+      }
+    }
+
+    if (!sablonBasarili) {
+      try {
+        await sendText(kullanici.telefon, kodMesaji);
+      } catch (err) {
+        console.error("2FA kodu gonderilemedi:", err?.response?.data || err.message);
+      }
     }
   }
 
