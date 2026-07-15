@@ -144,4 +144,27 @@ async function sendTemplate(to, templateName, languageCode, parametreler) {
   );
 }
 
-module.exports = { sendText, sendButtons, sendList, mediaYukle, sendDocument, sendTemplate };
+// Musteriden/danismandan gelen bir medyayi (foto, belge vb.) indirir. Once
+// medyanin gecici indirme linkini alir, sonra o linkten dosyayi ceker.
+// Webhook'tan gelen mesaj icindeki "id" alani mediaId olarak kullanilir.
+async function mediaIndir(mediaId) {
+  const bilgiUrl = `https://graph.facebook.com/${API_VERSION}/${mediaId}`;
+  const bilgiYaniti = await fetch(bilgiUrl, {
+    headers: { Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}` }
+  });
+  const bilgi = await bilgiYaniti.json();
+  if (!bilgi.url) {
+    throw new Error("Medya bilgisi alinamadi: " + JSON.stringify(bilgi));
+  }
+
+  const dosyaYaniti = await fetch(bilgi.url, {
+    headers: { Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}` }
+  });
+  const arrayBuffer = await dosyaYaniti.arrayBuffer();
+  return {
+    buffer: Buffer.from(arrayBuffer),
+    mimeType: bilgi.mime_type || dosyaYaniti.headers.get("content-type") || "application/octet-stream"
+  };
+}
+
+module.exports = { sendText, sendButtons, sendList, mediaYukle, sendDocument, sendTemplate, mediaIndir };

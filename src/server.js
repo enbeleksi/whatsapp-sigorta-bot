@@ -8,6 +8,8 @@ const advisorEngine = require("./advisorEngine");
 const { sendText, sendDocument } = require("./loggedWhatsapp");
 const messageLog = require("./messageLog");
 const leadStore = require("./leadStore");
+const dokumanStore = require("./dokumanStore");
+const flows = require("./flows");
 const db = require("./db");
 const sessionStore = require("./sessionStore");
 const { getSession } = sessionStore;
@@ -18,7 +20,21 @@ app.use(bodyParser.urlencoded({ extended: false })); // /panel/dogrula form gond
 
 // Panelden yuklenen dosyalari bellekte tutan gecici depolama (diske yazmiyoruz,
 // direkt WhatsApp'a yukleyip atiyoruz). 16MB'a kadar dosya kabul eder.
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 16 * 1024 * 1024 } });
+const { dosyaTuruIzinliMi } = require("./izinliDosyaTurleri");
+
+// Sadece PDF, Word, Excel ve fotograf turlerini kabul eder - kotu amacli
+// dosyalarin (calistirilabilir, arsiv vb.) yuklenmesini engellemek icin.
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 16 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (dosyaTuruIzinliMi(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error("Desteklenmeyen dosya turu. Sadece PDF, Word, Excel ve fotograf dosyalari yuklenebilir."));
+    }
+  }
+});
 
 // --- Ayni WhatsApp mesajinin iki kez islenmesini onleme (webhook tekrari) ---
 // Meta bazen ag sorunlari yuzunden ayni mesaji webhook'a birden fazla kez
@@ -198,7 +214,7 @@ app.get("/panel/dogrula", sadeceSifreGerekli, async (req, res) => {
     <style>
       body { font-family: -apple-system, Segoe UI, Arial, sans-serif; max-width: 360px; margin: 80px auto; text-align: center; color: #333; }
       input { font-size: 22px; padding: 10px; width: 160px; text-align: center; letter-spacing: 6px; border: 1px solid #ccc; border-radius: 6px; }
-      button { font-size: 15px; padding: 10px 24px; margin-top: 14px; background: #16324F; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
+      button { font-size: 15px; padding: 10px 24px; margin-top: 14px; background: #075E54; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
       .hata { color: #c00; margin-top: 10px; font-size: 13px; }
     </style>
     </head><body>
@@ -282,6 +298,36 @@ app.post("/api/panel/send-document", panelAuth, upload.single("dosya"), async (r
     console.error("Panel dosya gonderme hatasi:", err?.response?.data || err.message);
     res.status(500).json({ error: "Dosya gonderilemedi" });
   }
+});
+
+// --- Urun bazinda form/dokuman kutuphanesi ---
+// Danismanlar WhatsApp'tan "Form İste" ile bu dokumanlari istedigi an alabilir.
+app.get("/api/panel/dokumanlar", panelAuth, (req, res) => {
+  const urunler = Object.keys(flows).map((key) => {
+    const dokuman = dokumanStore.dokumanGetir(key);
+    return {
+      urunKey: key,
+      urunAdi: flows[key].label,
+      yuklu: !!dokuman,
+      dosyaAdi: dokuman ? dokuman.dosyaAdi : null,
+      yuklenmeZamani: dokuman ? dokuman.yuklenmeZamani : null
+    };
+  });
+  res.json({ urunler });
+});
+
+app.post("/api/panel/dokumanlar/:urunKey", panelAuth, upload.single("dosya"), (req, res) => {
+  const { urunKey } = req.params;
+  const dosya = req.file;
+  if (!flows[urunKey]) return res.status(400).json({ error: "Gecersiz urun" });
+  if (!dosya) return res.status(400).json({ error: "dosya gerekli" });
+  dokumanStore.dokumanKaydet(urunKey, dosya.originalname, dosya.mimetype, dosya.buffer);
+  res.json({ ok: true });
+});
+
+app.delete("/api/panel/dokumanlar/:urunKey", panelAuth, (req, res) => {
+  dokumanStore.dokumanSil(req.params.urunKey);
+  res.json({ ok: true });
 });
 
 app.post("/api/panel/toggle-pause", panelAuth, (req, res) => {
@@ -393,6 +439,18 @@ app.get("/webhook", (req, res) => {
 });
 
 // 2) Gelen mesajlari isleme (POST) - musteriden mesaj geldiginde Meta buraya POST atar
+// Dosya yukleme rotalarinda (multer) olusan hatalari (orn. desteklenmeyen
+// dosya turu, boyut siniri asimi) duzgun bir JSON mesajina cevirir. Express'te
+// hata yakalama middleware'i her zaman 4 parametreli olmali ve rotalardan
+// SONRA tanimlanmalidir.
+app.use((err, req, res, next) => {
+  if (req.path.startsWith("/api/panel/") && err) {
+    console.error("Dosya yukleme hatasi:", err.message);
+    return res.status(400).json({ error: err.message || "Dosya yuklenemedi." });
+  }
+  next(err);
+});
+
 app.post("/webhook", async (req, res) => {
   // Meta'ya hemen 200 donmek gerekiyor, aksi halde tekrar tekrar gonderir
   res.sendStatus(200);
@@ -430,11 +488,30 @@ app.post("/webhook", async (req, res) => {
           interactiveTitle: interactive.list_reply.title
         };
       }
+    } else if (message.type === "image") {
+      parsed = {
+        type: "media",
+        mediaKind: "image",
+        mediaId: message.image.id,
+        mimeType: message.image.mime_type,
+        dosyaAdi: "fotograf.jpg"
+      };
+    } else if (message.type === "document") {
+      parsed = {
+        type: "media",
+        mediaKind: "document",
+        mediaId: message.document.id,
+        mimeType: message.document.mime_type,
+        dosyaAdi: message.document.filename || "belge"
+      };
     }
 
     if (parsed) {
       if (advisorEngine.isDanisman(from)) {
         await advisorEngine.handleAdvisorMessage(from, parsed);
+      } else if (parsed.type === "media") {
+        // Musteri tarafinda foto/belge alma henuz desteklenmiyor - bilgilendirip geciyoruz.
+        await sendText(from, "Şu an fotoğraf/belge alamıyoruz, iletmek istediğiniz bilgiyi yazılı olarak paylaşabilir misiniz? 🙏");
       } else {
         await handleIncoming(from, parsed);
       }
@@ -490,7 +567,8 @@ async function tumVeriyiKaydet() {
   await Promise.all([
     sessionStore.kaydet().catch((err) => console.error("Oturumlar kaydedilemedi:", err.message)),
     leadStore.kaydet().catch((err) => console.error("Talepler kaydedilemedi:", err.message)),
-    messageLog.kaydet().catch((err) => console.error("Mesaj gecmisi kaydedilemedi:", err.message))
+    messageLog.kaydet().catch((err) => console.error("Mesaj gecmisi kaydedilemedi:", err.message)),
+    dokumanStore.kaydet().catch((err) => console.error("Dokumanlar kaydedilemedi:", err.message))
   ]);
 }
 
@@ -499,6 +577,7 @@ async function baslat() {
   await sessionStore.yukle();
   await leadStore.yukle();
   await messageLog.yukle();
+  await dokumanStore.yukle();
 
   app.listen(PORT, () => {
     console.log(`Sunucu ${PORT} portunda calisiyor.`);

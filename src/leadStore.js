@@ -27,6 +27,7 @@ function yeniLeadOlustur({ telefon, musteriAdi, urun, danismanAdi, danismanNumar
     ozet,
     durum: "Bekliyor",
     notlar: [], // { metin, tarih }
+    belgeler: [], // { dosyaAdi, mimeType, veriBase64, yuklenmeZamani }
     hatirlatma: null, // { zaman: timestamp, not: string, gonderildi: bool }
     olusturulmaZamani: Date.now(),
     guncellenmeZamani: Date.now()
@@ -60,6 +61,22 @@ function notEkle(id, metin) {
   const lead = leads.get(id);
   if (!lead || !metin) return null;
   lead.notlar.push({ metin, tarih: Date.now() });
+  lead.guncellenmeZamani = Date.now();
+  return lead;
+}
+
+// Bir talebe belge/fotograf ekler (danisman WhatsApp'tan gonderdiginde,
+// ya da panelden yuklendiginde kullanilir).
+function belgeEkle(id, { dosyaAdi, mimeType, veriBase64 }) {
+  const lead = leads.get(id);
+  if (!lead || !veriBase64) return null;
+  if (!lead.belgeler) lead.belgeler = [];
+  lead.belgeler.push({
+    dosyaAdi: dosyaAdi || "belge",
+    mimeType: mimeType || "application/octet-stream",
+    veriBase64,
+    yuklenmeZamani: Date.now()
+  });
   lead.guncellenmeZamani = Date.now();
   return lead;
 }
@@ -116,6 +133,7 @@ module.exports = {
   leadGetir,
   durumGuncelle,
   notEkle,
+  belgeEkle,
   hatirlatmaKur,
   zamaniGelenHatirlatmalar,
   hatirlatmaGonderildiIsaretle,

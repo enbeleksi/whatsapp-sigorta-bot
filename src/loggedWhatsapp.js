@@ -73,4 +73,4 @@ async function sendTemplate(to, templateName, languageCode, parameters, gosteril
   }
 }
 
-module.exports = { sendText, sendButtons, sendList, sendDocument, sendTemplate };
+module.exports = { sendText, sendButtons, sendList, sendDocument, sendTemplate, mediaIndir: whatsapp.mediaIndir };

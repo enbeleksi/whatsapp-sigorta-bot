@@ -7,8 +7,10 @@
 // tamamen ayri bir menu sistemidir.
 
 const { getSession } = require("./sessionStore");
-const { sendText, sendButtons, sendList } = require("./loggedWhatsapp");
+const { sendText, sendButtons, sendList, sendDocument, mediaIndir } = require("./loggedWhatsapp");
 const leadStore = require("./leadStore");
+const dokumanStore = require("./dokumanStore");
+const { dosyaTuruIzinliMi } = require("./izinliDosyaTurleri");
 const flows = require("./flows");
 const conversationEngine = require("./conversationEngine");
 
@@ -78,8 +80,17 @@ async function karsilamaGoster(from, session) {
   await sendButtons(
     from,
     `Merhaba ${danisman ? danisman.name : ""}! 👋 Ne yapmak istersiniz?`,
-    ["Yeni Talep Oluştur", "Taleplerimi Gör"]
+    ["Yeni Talep Oluştur", "Taleplerimi Gör", "Form İste"]
   );
+}
+
+// --- Istenildigi an urun bazinda PDF form/dokuman gonderme ---
+async function formUrunSec(from, session) {
+  session.state = "DANISMAN_FORM_URUN_SEC";
+  const urunAnahtarlari = Object.keys(flows);
+  session.danismanFormUrunAnahtarlari = urunAnahtarlari;
+  const etiketler = urunAnahtarlari.map((k) => flows[k].menuLabel || flows[k].label);
+  await sendList(from, "Hangi ürünün formunu/dokümanını almak istersiniz?", "Ürün Seç", etiketler);
 }
 
 // --- Mevcut talepleri listeleme/yonetme ---
@@ -236,6 +247,42 @@ async function danismanYeniTalepiTamamla(from, session) {
 
 async function handleAdvisorMessage(from, parsed) {
   const session = getSession(from);
+
+  // Musteri (danisman) bir foto/belge gonderdiyse: eger su an bir talebin
+  // detayini goruntuluyorsa, dogrudan o talebe eklenir. Aksi halde nazikce
+  // uyarilir. Guvenlik icin sadece PDF/Word/Excel/fotograf turleri kabul edilir.
+  if (parsed.type === "media") {
+    if (!dosyaTuruIzinliMi(parsed.mimeType)) {
+      await sendText(
+        from,
+        "Bu dosya türünü kabul edemiyoruz 🙏 Sadece PDF, Word, Excel veya fotoğraf (jpg/png) gönderebilirsiniz."
+      );
+      return;
+    }
+    if (session.state === "DANISMAN_LEAD_DETAY" && session.danismanSeciliLeadId) {
+      try {
+        const { buffer, mimeType } = await mediaIndir(parsed.mediaId);
+        const lead = leadStore.belgeEkle(session.danismanSeciliLeadId, {
+          dosyaAdi: parsed.dosyaAdi,
+          mimeType: parsed.mimeType || mimeType,
+          veriBase64: buffer.toString("base64")
+        });
+        await sendText(from, "Belge talebe eklendi ✅");
+        if (lead) await leadDetayGoster(from, session, lead);
+        else await karsilamaGoster(from, session);
+      } catch (err) {
+        console.error("Belge indirilemedi/eklenemedi:", err?.response?.data || err.message);
+        await sendText(from, "Belgeyi kaydederken bir sorun oluştu, tekrar dener misiniz?");
+      }
+      return;
+    }
+    await sendText(
+      from,
+      "Bu belgeyi bir talebe eklemek için önce 'Taleplerimi Gör' ile ilgili talebi açmanız gerekiyor."
+    );
+    return;
+  }
+
   const userText = parsed.type === "text" ? parsed.text.trim() : parsed.interactiveTitle;
 
   // Her zaman "menu"/"iptal"/"geri" yazarak karsilama ekranina donulebilir.
@@ -253,6 +300,41 @@ async function handleAdvisorMessage(from, parsed) {
       if (userText === "Taleplerimi Gör") {
         await anaMenuGoster(from, session);
         return;
+      }
+      if (userText === "Form İste") {
+        await formUrunSec(from, session);
+        return;
+      }
+      await karsilamaGoster(from, session);
+      return;
+    }
+
+    case "DANISMAN_FORM_URUN_SEC": {
+      if (parsed.type !== "interactive" || !parsed.interactiveId) {
+        await formUrunSec(from, session);
+        return;
+      }
+      const index = parseInt(parsed.interactiveId.replace("list_", ""), 10);
+      const urunKey = (session.danismanFormUrunAnahtarlari || [])[index];
+      const urun = urunKey && flows[urunKey];
+      if (!urun) {
+        await formUrunSec(from, session);
+        return;
+      }
+      const dokuman = dokumanStore.dokumanGetir(urunKey);
+      if (!dokuman) {
+        await sendText(
+          from,
+          `${urun.label} için henüz bir form/doküman yüklenmemiş. Panelden yüklenmesini isteyebilirsiniz.`
+        );
+      } else {
+        try {
+          const buffer = Buffer.from(dokuman.veriBase64, "base64");
+          await sendDocument(from, buffer, dokuman.mimeType, dokuman.dosyaAdi);
+        } catch (err) {
+          console.error("Form gonderilemedi:", err?.response?.data || err.message);
+          await sendText(from, "Formu gönderirken bir sorun oluştu, tekrar dener misiniz?");
+        }
       }
       await karsilamaGoster(from, session);
       return;
