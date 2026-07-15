@@ -265,7 +265,7 @@ async function bildirimGonder(numara, urunAdi, musteriAdi, telefon, detayliMetin
 
   if (detayliSablonAdi && kompaktDetay) {
     try {
-      await sendTemplate(numara, detayliSablonAdi, "tr", { detay: kompaktDetay }, detayliMetin);
+      await sendTemplate(numara, detayliSablonAdi, "tr", { detay: sablonParametresiIcinTemizle(kompaktDetay) }, detayliMetin);
       return; // basarili - tum detay zaten iletildi, baska mesaj gondermeye gerek yok
     } catch (err) {
       console.error("Detayli sablon bildirimi gonderilemedi:", err?.response?.data || err.message);
@@ -843,6 +843,22 @@ async function finishFlow(from, session) {
   }
 }
 
+// WhatsApp sablon PARAMETRELERI (degiskenleri) alt satira gecme/tab karakteri
+// icermemeli ve 4'ten fazla ardisik bosluk olmamali (Meta hata 132018 ile
+// reddediyor) - bu kisitlama sadece degisken DEGERLERI icin gecerli, sablonun
+// kendi sabit metni icin degil. Bu yuzden template'e gonderilecek her degisken
+// degerini bu fonksiyondan geciriyoruz (duz metin/panel gosterimi etkilenmez,
+// orijinal - satir sonlu - metin onlarda aynen kullanilmaya devam eder).
+function sablonParametresiIcinTemizle(metin) {
+  return (metin || "")
+    .replace(/\r\n|\r|\n/g, " • ")
+    .replace(/\t/g, " ")
+    .replace(/ {5,}/g, "    ")
+    .replace(/(\s*•\s*){2,}/g, " • ") // ust uste gelen bosluk/bullet'lari tekillestir
+    .replace(/^\s*•\s*|\s*•\s*$/g, "") // basta/sonda kalan bullet'i temizle
+    .trim();
+}
+
 // Panelden kurulan bir hatirlatmanin zamani geldiginde danismana gonderilir.
 // AGENT_DETAY_TEMPLATE_NAME ayarliysa onu kullanir (24 saat penceresine tabi
 // degil, her zaman ulasir); yoksa duz metin dener (pencere acik olmasi gerekir).
@@ -850,7 +866,7 @@ async function hatirlatmaGonder(numara, metin) {
   const detayliSablonAdi = process.env.AGENT_DETAY_TEMPLATE_NAME;
   if (detayliSablonAdi) {
     try {
-      await sendTemplate(numara, detayliSablonAdi, "tr", { detay: metin }, metin);
+      await sendTemplate(numara, detayliSablonAdi, "tr", { detay: sablonParametresiIcinTemizle(metin) }, metin);
       return;
     } catch (err) {
       console.error("Hatırlatma şablonu gönderilemedi:", err?.response?.data || err.message);
@@ -870,5 +886,6 @@ module.exports = {
   resolveDanismanText,
   kompaktDetayOlustur,
   bildirimGonder,
-  guvenlikAgiNumaralari
+  guvenlikAgiNumaralari,
+  sablonParametresiIcinTemizle
 };

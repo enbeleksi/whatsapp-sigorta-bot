@@ -3,7 +3,7 @@ const express = require("express");
 const bodyParser = require("body-parser");
 const path = require("path");
 const multer = require("multer");
-const { handleIncoming, hatirlatmaGonder } = require("./conversationEngine");
+const { handleIncoming, hatirlatmaGonder, sablonParametresiIcinTemizle } = require("./conversationEngine");
 const advisorEngine = require("./advisorEngine");
 const { sendText, sendDocument, sendTemplate } = require("./loggedWhatsapp");
 const messageLog = require("./messageLog");
@@ -207,7 +207,7 @@ app.get("/panel/dogrula", sadeceSifreGerekli, async (req, res) => {
     let sablonBasarili = false;
     if (detayliSablonAdi) {
       try {
-        await sendTemplate(kullanici.telefon, detayliSablonAdi, "tr", { detay: kodMesaji }, kodMesaji);
+        await sendTemplate(kullanici.telefon, detayliSablonAdi, "tr", { detay: sablonParametresiIcinTemizle(kodMesaji) }, kodMesaji);
         sablonBasarili = true;
       } catch (err) {
         console.error("2FA sablon mesaji gonderilemedi:", err?.response?.data || err.message);
