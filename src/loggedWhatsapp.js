@@ -73,4 +73,24 @@ async function sendTemplate(to, templateName, languageCode, parameters, gosteril
   }
 }
 
-module.exports = { sendText, sendButtons, sendList, sendDocument, sendTemplate, mediaIndir: whatsapp.mediaIndir };
+// Authentication kategorisindeki (Kopyala Kod butonlu) sablonlar icin.
+async function sendAuthTemplate(to, templateName, languageCode, kod, gosterilecekMetin) {
+  try {
+    const result = await whatsapp.sendAuthTemplate(to, templateName, languageCode, kod);
+    messageLog.logMessage(to, "out", gosterilecekMetin);
+    return result;
+  } catch (err) {
+    messageLog.logMessage(to, "out", `⚠️ (GONDERILEMEDI) ${gosterilecekMetin}`);
+    throw err;
+  }
+}
+
+module.exports = {
+  sendText,
+  sendButtons,
+  sendList,
+  sendDocument,
+  sendTemplate,
+  sendAuthTemplate,
+  mediaIndir: whatsapp.mediaIndir
+};

@@ -144,6 +144,38 @@ async function sendTemplate(to, templateName, languageCode, parametreler) {
   );
 }
 
+// Authentication kategorisindeki (Kopyala Kod butonlu) sablonlar icin ozel
+// gonderim fonksiyonu - normal sendTemplate'ten farkli olarak kod, hem govde
+// {{1}} degiskeninde hem de butonun "coupon_code" parametresinde AYNI ANDA
+// gecmek zorunda (Meta'nin zorunlu tuttugu format).
+async function sendAuthTemplate(to, templateName, languageCode, kod) {
+  return axios.post(
+    apiUrl(),
+    {
+      messaging_product: "whatsapp",
+      to,
+      type: "template",
+      template: {
+        name: templateName,
+        language: { code: languageCode },
+        components: [
+          {
+            type: "body",
+            parameters: [{ type: "text", text: kod }]
+          },
+          {
+            type: "button",
+            sub_type: "COPY_CODE",
+            index: 0,
+            parameters: [{ type: "coupon_code", coupon_code: kod }]
+          }
+        ]
+      }
+    },
+    { headers: headers() }
+  );
+}
+
 // Musteriden/danismandan gelen bir medyayi (foto, belge vb.) indirir. Once
 // medyanin gecici indirme linkini alir, sonra o linkten dosyayi ceker.
 // Webhook'tan gelen mesaj icindeki "id" alani mediaId olarak kullanilir.
@@ -180,4 +212,14 @@ async function sablonOlustur(sablonVerisi) {
   );
 }
 
-module.exports = { sendText, sendButtons, sendList, mediaYukle, sendDocument, sendTemplate, mediaIndir, sablonOlustur };
+module.exports = {
+  sendText,
+  sendButtons,
+  sendList,
+  mediaYukle,
+  sendDocument,
+  sendTemplate,
+  sendAuthTemplate,
+  mediaIndir,
+  sablonOlustur
+};

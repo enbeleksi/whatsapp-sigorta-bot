@@ -5,7 +5,7 @@ const path = require("path");
 const multer = require("multer");
 const { handleIncoming, hatirlatmaGonder, sablonParametresiIcinTemizle } = require("./conversationEngine");
 const advisorEngine = require("./advisorEngine");
-const { sendText, sendDocument, sendTemplate } = require("./loggedWhatsapp");
+const { sendText, sendDocument, sendTemplate, sendAuthTemplate } = require("./loggedWhatsapp");
 const { sablonOlustur } = require("./whatsapp");
 const messageLog = require("./messageLog");
 const leadStore = require("./leadStore");
@@ -221,20 +221,34 @@ app.get("/panel/dogrula", sadeceSifreGerekli, async (req, res) => {
       const kodMesaji = `🔐 WE Sigorta paneline giriş doğrulama kodunuz: ${kod}\n\nBu kod 5 dakika geçerlidir.`;
       // Onceki deneyimlerimizden biliyoruz ki danismanlar bot numarasina kendileri
       // yazmadigi surece 24 saatlik pencere kapali olabiliyor ve duz metin
-      // (sendText) sessizce ulasmayabiliyor. Bu yuzden once (varsa) onayli
-      // sablonu deniyoruz - sablonlar bu pencereye tabi degil, her zaman ulasir.
-      const detayliSablonAdi = process.env.AGENT_DETAY_TEMPLATE_NAME;
-      let sablonBasarili = false;
-      if (detayliSablonAdi) {
+      // (sendText) sessizce ulasmayabiliyor. Bu yuzden once ozel 2FA sablonunu
+      // (varsa - AGENT_2FA_TEMPLATE_NAME), o da yoksa/basarisiz olursa genel
+      // detay sablonunu, o da olmazsa duz metni deniyoruz.
+      let gonderimBasarili = false;
+
+      const otpSablonAdi = process.env.AGENT_2FA_TEMPLATE_NAME;
+      if (otpSablonAdi) {
         try {
-          await sendTemplate(kullanici.telefon, detayliSablonAdi, "tr", { detay: sablonParametresiIcinTemizle(kodMesaji) }, kodMesaji);
-          sablonBasarili = true;
+          await sendAuthTemplate(kullanici.telefon, otpSablonAdi, "tr", kod, kodMesaji);
+          gonderimBasarili = true;
         } catch (err) {
-          console.error("2FA sablon mesaji gonderilemedi:", err?.response?.data || err.message);
+          console.error("2FA (auth) sablon mesaji gonderilemedi:", err?.response?.data || err.message);
         }
       }
 
-      if (!sablonBasarili) {
+      if (!gonderimBasarili) {
+        const detayliSablonAdi = process.env.AGENT_DETAY_TEMPLATE_NAME;
+        if (detayliSablonAdi) {
+          try {
+            await sendTemplate(kullanici.telefon, detayliSablonAdi, "tr", { detay: sablonParametresiIcinTemizle(kodMesaji) }, kodMesaji);
+            gonderimBasarili = true;
+          } catch (err) {
+            console.error("2FA sablon mesaji gonderilemedi:", err?.response?.data || err.message);
+          }
+        }
+      }
+
+      if (!gonderimBasarili) {
         try {
           await sendText(kullanici.telefon, kodMesaji);
         } catch (err) {
