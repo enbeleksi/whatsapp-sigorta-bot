@@ -167,4 +167,17 @@ async function mediaIndir(mediaId) {
   };
 }
 
-module.exports = { sendText, sendButtons, sendList, mediaYukle, sendDocument, sendTemplate, mediaIndir };
+// Meta Graph API uzerinden dogrudan yeni bir mesaj sablonu olusturur. Web
+// arayuzu (WhatsApp Manager) bazen aciklanamayan genel hatalar verebiliyor -
+// bu durumda ayni istegi dogrudan API'ye gondermek daha guvenilir olabiliyor.
+// sablonVerisi, Meta'nin bekledigi tam JSON yapisidir (name, language,
+// category, components).
+async function sablonOlustur(sablonVerisi) {
+  return axios.post(
+    `https://graph.facebook.com/${API_VERSION}/${process.env.WHATSAPP_BUSINESS_ACCOUNT_ID}/message_templates`,
+    sablonVerisi,
+    { headers: headers() }
+  );
+}
+
+module.exports = { sendText, sendButtons, sendList, mediaYukle, sendDocument, sendTemplate, mediaIndir, sablonOlustur };

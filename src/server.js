@@ -6,6 +6,7 @@ const multer = require("multer");
 const { handleIncoming, hatirlatmaGonder, sablonParametresiIcinTemizle } = require("./conversationEngine");
 const advisorEngine = require("./advisorEngine");
 const { sendText, sendDocument, sendTemplate } = require("./loggedWhatsapp");
+const { sablonOlustur } = require("./whatsapp");
 const messageLog = require("./messageLog");
 const leadStore = require("./leadStore");
 const dokumanStore = require("./dokumanStore");
@@ -187,10 +188,12 @@ function panelAuth(req, res, next) {
 // OTP dogrulama sayfasi: kod uretir, WhatsApp'tan (girisi yapanin KENDI
 // numarasina) gonderir, girisi bekler.
 // Ayni kullanici icin kisa surede (OTP_COOLDOWN_MS) art arda kod uretilip
-// gonderilmesini engeller - bazi tarayicilarin/aglarin ayni sayfaya art arda
-// iki istek atmasi (cift yukleme, otomatik yeniden deneme vb.) yuzunden iki
-// farkli kodun peş peşe gonderilmesini onlemek icin.
-const OTP_COOLDOWN_MS = 20 * 1000;
+// gonderilmesini engeller - bazi tarayicilarin/telefonlarin acik kalan bir
+// sekmeyi arka planda periyodik olarak tazelemesi (orn. iPhone'larda yaygin)
+// yuzunden her tazelemede yeni kod gonderilmesini onlemek icin. Sure, OTP
+// gecerlilik suresiyle ayni tutuluyor - yani kod hala gecerliyken sekme
+// tazelense de ayni kod gecerliligini korur, gereksiz yeni kod gonderilmez.
+const OTP_COOLDOWN_MS = OTP_GECERLILIK_MS;
 const sonKodGonderimZamani = new Map(); // kullaniciAdi -> zaman damgasi
 
 app.get("/panel/dogrula", sadeceSifreGerekli, async (req, res) => {
@@ -292,6 +295,32 @@ app.post("/panel/dogrula", sadeceSifreGerekli, (req, res) => {
 });
 
 // --- Temsilci paneli sayfasi ve API'leri ---
+// --- Bir kerelik kurulum: 2FA guvenlik kodu icin Authentication kategorisinde
+// sablon olusturur (Graph API uzerinden - WhatsApp Manager arayuzu bazen
+// aciklanamayan genel hatalar verdigi icin). Kullanildiktan sonra silinebilir.
+app.get("/api/panel/guvenlik-kodu-sablonu-olustur", panelAuth, async (req, res) => {
+  try {
+    const sonuc = await sablonOlustur({
+      name: "guvenlik_kodu",
+      language: "tr",
+      category: "AUTHENTICATION",
+      components: [
+        { type: "BODY", add_security_recommendation: true },
+        { type: "FOOTER", code_expiration_minutes: 5 },
+        { type: "BUTTONS", buttons: [{ type: "OTP", otp_type: "COPY_CODE" }] }
+      ]
+    });
+    res.send(
+      `<pre style="font-family:monospace; padding:20px;">✅ Şablon isteği gönderildi.\n\n${JSON.stringify(sonuc.data, null, 2)}</pre>`
+    );
+  } catch (err) {
+    console.error("Sablon olusturma hatasi:", err?.response?.data || err.message);
+    res.status(500).send(
+      `<pre style="font-family:monospace; padding:20px; color:#c00;">❌ Hata:\n\n${JSON.stringify(err?.response?.data || err.message, null, 2)}</pre>`
+    );
+  }
+});
+
 app.get("/panel", panelAuth, (req, res) => {
   res.sendFile(path.join(__dirname, "panel.html"));
 });
