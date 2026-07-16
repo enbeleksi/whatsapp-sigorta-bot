@@ -164,10 +164,14 @@ async function sendAuthTemplate(to, templateName, languageCode, kod) {
             parameters: [{ type: "text", text: kod }]
           },
           {
+            // Not: Kopyala-Kod (Copy Code) butonlu Authentication sablonlarinda
+            // bile GONDERIM sirasinda buton alt tipi "url" ve parametre tipi
+            // "text" olmali - "COPY_CODE"/"coupon_code" kullanmak Meta'dan
+            // 132018 hatasi ("Button at index 0 must be of type Url") aliyor.
             type: "button",
-            sub_type: "COPY_CODE",
+            sub_type: "url",
             index: 0,
-            parameters: [{ type: "coupon_code", coupon_code: kod }]
+            parameters: [{ type: "text", text: kod }]
           }
         ]
       }
