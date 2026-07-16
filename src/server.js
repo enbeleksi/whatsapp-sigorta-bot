@@ -187,32 +187,45 @@ function panelAuth(req, res, next) {
 
 // OTP dogrulama sayfasi: kod uretir, WhatsApp'tan (girisi yapanin KENDI
 // numarasina) gonderir, girisi bekler.
-// Ayni kullanici icin kisa surede (OTP_COOLDOWN_MS) art arda kod uretilip
-// gonderilmesini engeller - bazi tarayicilarin/telefonlarin acik kalan bir
-// sekmeyi arka planda periyodik olarak tazelemesi (orn. iPhone'larda yaygin)
-// yuzunden her tazelemede yeni kod gonderilmesini onlemek icin. Sure, OTP
-// gecerlilik suresiyle ayni tutuluyor - yani kod hala gecerliyken sekme
-// tazelense de ayni kod gecerliligini korur, gereksiz yeni kod gonderilmez.
+// Ayni kullanici icin kisa surede (OTP_COOLDOWN_MS) art arda YENI kod
+// uretilip gonderilmesini engeller - bazi tarayicilarin/telefonlarin acik
+// kalan bir sekmeyi arka planda periyodik olarak tazelemesi (orn.
+// iPhone'larda yaygin) yuzunden her tazelemede yeni kod gonderilmesini
+// onlemek icin. ONEMLI: cooldown suresince YENI mesaj atilmasa da, o an
+// gecerli olan kod her zaman tarayicinin cerezine baglanir - aksi halde
+// kullanici dogru kodu girse bile "kod hatali" hatasi alirdi (bu, daha
+// once yasanan gercek bir hataydi).
 const OTP_COOLDOWN_MS = OTP_GECERLILIK_MS;
-const sonKodGonderimZamani = new Map(); // kullaniciAdi -> zaman damgasi
+const sonDenemeler = new Map(); // kullaniciAdi -> { token, deneme, gonderimZamani }
 
 app.get("/panel/dogrula", sadeceSifreGerekli, async (req, res) => {
   const kullanici = req.panelKullanici;
   let denemeToken = cookieOku(req, "panel_deneme");
   let deneme = denemeToken && otpDenemeleri.get(denemeToken);
-  const gecerliDenemeVar = deneme && deneme.expiresAt >= Date.now() && deneme.kullaniciAdi === kullanici.kullaniciAdi;
+  const buTarayicidaGecerliDenemeVar =
+    deneme && deneme.expiresAt >= Date.now() && deneme.kullaniciAdi === kullanici.kullaniciAdi;
 
-  if (!gecerliDenemeVar) {
-    const sonGonderim = sonKodGonderimZamani.get(kullanici.kullaniciAdi) || 0;
-    const kisaSureOnceGonderildiMi = Date.now() - sonGonderim < OTP_COOLDOWN_MS;
+  if (!buTarayicidaGecerliDenemeVar) {
+    const sonKayit = sonDenemeler.get(kullanici.kullaniciAdi);
+    const sonKayitHalaGecerliMi = sonKayit && sonKayit.deneme.expiresAt >= Date.now();
+    const kisaSureOnceGonderildiMi = sonKayit && Date.now() - sonKayit.gonderimZamani < OTP_COOLDOWN_MS;
 
-    if (!kisaSureOnceGonderildiMi) {
+    if (sonKayitHalaGecerliMi && kisaSureOnceGonderildiMi) {
+      // Yakin zamanda (baska bir istekte) bu kullanici icin zaten gecerli bir
+      // kod uretilmis - yeni WhatsApp mesaji ATMIYORUZ ama bu tarayiciyi da
+      // o gecerli koda BAGLIYORUZ, aksi halde kullanici elindeki dogru kodu
+      // girse bile hata alir.
+      denemeToken = sonKayit.token;
+      deneme = sonKayit.deneme;
+      cookieYaz(res, "panel_deneme", denemeToken, deneme.expiresAt - Date.now());
+      console.log(`2FA mevcut koda baglandi (yeni mesaj atilmadi): kullanici=${kullanici.kullaniciAdi}`);
+    } else {
       const kod = altiHaneliKod();
       denemeToken = rastgeleToken();
       deneme = { kod, expiresAt: Date.now() + OTP_GECERLILIK_MS, kullaniciAdi: kullanici.kullaniciAdi };
       otpDenemeleri.set(denemeToken, deneme);
       cookieYaz(res, "panel_deneme", denemeToken, OTP_GECERLILIK_MS);
-      sonKodGonderimZamani.set(kullanici.kullaniciAdi, Date.now());
+      sonDenemeler.set(kullanici.kullaniciAdi, { token: denemeToken, deneme, gonderimZamani: Date.now() });
 
       console.log(
         `2FA kodu uretildi: kullanici=${kullanici.kullaniciAdi} (${kullanici.ad}) telefon=${kullanici.telefon}`
@@ -255,10 +268,6 @@ app.get("/panel/dogrula", sadeceSifreGerekli, async (req, res) => {
           console.error("2FA kodu gonderilemedi:", err?.response?.data || err.message);
         }
       }
-    } else {
-      console.log(
-        `2FA kodu ATLANDI (${OTP_COOLDOWN_MS / 1000} sn icinde tekrar istek): kullanici=${kullanici.kullaniciAdi}`
-      );
     }
   }
 

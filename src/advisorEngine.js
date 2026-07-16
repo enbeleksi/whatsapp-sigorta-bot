@@ -11,6 +11,7 @@ const { sendText, sendButtons, sendList, sendDocument, mediaIndir } = require(".
 const leadStore = require("./leadStore");
 const dokumanStore = require("./dokumanStore");
 const { dosyaTuruIzinliMi } = require("./izinliDosyaTurleri");
+const { garantiEmekliligeGonder } = require("./eposta");
 const flows = require("./flows");
 const conversationEngine = require("./conversationEngine");
 
@@ -237,6 +238,17 @@ async function danismanYeniTalepiTamamla(from, session) {
     danismanNumarasi: from,
     ozet: kompaktDetay
   });
+
+  // BES ve Prim Iadeli Hayat Sigortasi gibi bazi urunlerde, danisman tarafindan
+  // olusturulan talepler de Garanti Emeklilik'e otomatik mail olarak gider.
+  if (flow.garantiEmekliligeGonder) {
+    garantiEmekliligeGonder({
+      urunAdi: flow.label,
+      musteriAdi,
+      telefon: sigortaliTelefon,
+      ozetSatirlari: summaryLines
+    }).catch((err) => console.error("Garanti Emeklilik maili gonderilirken beklenmeyen hata:", err.message));
+  }
 
   await sendText(
     from,

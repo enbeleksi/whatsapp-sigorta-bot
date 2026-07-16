@@ -1,6 +1,7 @@
 const { getSession, resetSession } = require("./sessionStore");
 const { sendText, sendButtons, sendList, sendTemplate, mediaIndir } = require("./loggedWhatsapp");
 const { ruhsatFotografiAnalizEt } = require("./ruhsatAnaliz");
+const { garantiEmekliligeGonder } = require("./eposta");
 const messageLog = require("./messageLog");
 const leadStore = require("./leadStore");
 const flows = require("./flows");
@@ -840,6 +841,26 @@ async function finishFlow(from, session) {
   // Basariyla okunan ruhsat fotografi gibi ek belgeler varsa onlari da ekle.
   if (Array.isArray(session.ekBelgeler)) {
     session.ekBelgeler.forEach((belge) => leadStore.belgeEkle(yeniLead.id, belge));
+  }
+
+  // BES ve Prim Iadeli Hayat Sigortasi gibi bazi urunlerde, talep Garanti
+  // Emeklilik'e de otomatik mail olarak yonlendirilir (bkz. eposta.js).
+  // Danisman yonlendirme sorulari (danisman_gorustu_mu/danisman_adi) bizim ic
+  // isimiz oldugu icin mail icerigine dahil edilmez.
+  if (flow.garantiEmekliligeGonder) {
+    const DANISMAN_SORU_ID_LERI = ["danisman_gorustu_mu", "danisman_adi"];
+    const mailSatirlari = askedQuestions
+      .filter((q) => !DANISMAN_SORU_ID_LERI.includes(q.id))
+      .map((q) => {
+        const questionText = resolveText(q, session.answers);
+        return `- ${questionText.replace(/\?$/, "")}: ${cevabiMetneCevir(session.answers[q.id])}`;
+      });
+    garantiEmekliligeGonder({
+      urunAdi: flow.label,
+      musteriAdi: session.name,
+      telefon: from,
+      ozetSatirlari: mailSatirlari
+    }).catch((err) => console.error("Garanti Emeklilik maili gonderilirken beklenmeyen hata:", err.message));
   }
 }
 

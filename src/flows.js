@@ -582,6 +582,9 @@ module.exports = {
     label: "Prim İadeli Hayat Sigortası",
     menuLabel: "Prim İadeli Hayat Sig.", // Urun secim listesinde WhatsApp'in 24 karakter siniri var
     agentNumber: "905326876126", // Enbel - danışman seçilmezse (Hayır derse) varsayılan buraya düşer
+    // Bu urun tamamlaninca Garanti Emeklilik'e de otomatik mail gider
+    // (bkz. eposta.js) - onlar kendi is akislarina ekleyip cagri merkezinden ariyor.
+    garantiEmekliligeGonder: true,
     // QR/link uzerinden gelen hazır mesaj bu metni içeriyorsa, bot direkt bu ürüne geçer.
     qrTrigger: /prim iadeli|hayat sigortas/i,
     qrGreeting:
@@ -620,6 +623,9 @@ module.exports = {
     label: "Bireysel Emeklilik Sistemi (BES)",
     menuLabel: "Bireysel Emeklilik(BES)", // Urun secim listesinde WhatsApp'in 24 karakter siniri var
     agentNumber: "905326876126", // Enbel - BES doğrudan buraya gider
+    // Bu urun tamamlaninca Garanti Emeklilik'e de otomatik mail gider
+    // (bkz. eposta.js) - onlar kendi is akislarina ekleyip cagri merkezinden ariyor.
+    garantiEmekliligeGonder: true,
     advisors: DANISMANLAR,
     questions: [
       ...DANISMAN_SORULARI,
