@@ -45,6 +45,15 @@ async function garantiEmekliligeGonder({ urunAdi, musteriAdi, telefon, ozetSatir
     return;
   }
 
+  // TEST MODU: EPOSTA_TEST_ADRESI ortam degiskeni tanimliysa, mail Garanti
+  // Emeklilik'e DEGIL, bu test adresine gider - boylece gercek adresi
+  // gereksiz yere meşgul etmeden deneme yapabiliriz. Test bitince bu
+  // degiskeni Railway'den kaldirmaniz yeterli, otomatik olarak gercek
+  // alicilara donulur.
+  const testAdresi = process.env.EPOSTA_TEST_ADRESI;
+  const aliciListesi = testAdresi ? [testAdresi] : GARANTI_EMEKLILIK_ALICILARI;
+  const konuOnEki = testAdresi ? "[TEST] " : "";
+
   const govde =
     `Yeni ${urunAdi} talebi\n\n` +
     `Müşteri: ${musteriAdi}\n` +
@@ -55,11 +64,13 @@ async function garantiEmekliligeGonder({ urunAdi, musteriAdi, telefon, ozetSatir
   try {
     await transport.sendMail({
       from: `"WE Sigorta" <${process.env.OUTLOOK_EMAIL}>`,
-      to: GARANTI_EMEKLILIK_ALICILARI.join(", "),
-      subject: `Yeni ${urunAdi} Talebi - ${musteriAdi}`,
+      to: aliciListesi.join(", "),
+      subject: `${konuOnEki}Yeni ${urunAdi} Talebi - ${musteriAdi}`,
       text: govde
     });
-    console.log(`Garanti Emeklilik'e mail gonderildi: ${urunAdi} - ${musteriAdi}`);
+    console.log(
+      `Garanti Emeklilik maili gonderildi (${testAdresi ? "TEST MODU: " + testAdresi : "GERCEK ALICILAR"}): ${urunAdi} - ${musteriAdi}`
+    );
   } catch (err) {
     console.error("Garanti Emeklilik maili gonderilemedi:", err.message);
   }
