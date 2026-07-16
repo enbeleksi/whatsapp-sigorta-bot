@@ -548,6 +548,7 @@ app.use((err, req, res, next) => {
 app.post("/webhook", async (req, res) => {
   // Meta'ya hemen 200 donmek gerekiyor, aksi halde tekrar tekrar gonderir
   res.sendStatus(200);
+  console.log("Webhook istegi alindi.");
 
   try {
     const entry = req.body.entry?.[0];
@@ -556,6 +557,8 @@ app.post("/webhook", async (req, res) => {
     const message = value?.messages?.[0];
 
     if (!message) return; // durum bildirimi (okundu/iletildi) vb. olabilir, yoksay
+
+    console.log(`Webhook mesaji alindi: from=${message.from} type=${message.type} id=${message.id}`);
 
     if (mesajDahaOnceIslendiMi(message.id)) {
       console.log("Tekrarlanan webhook mesaji atlandi:", message.id);
