@@ -816,7 +816,7 @@ async function finishFlow(from, session) {
   }
 
   // Talebi takip sistemine kaydet - danisman panelden durumunu
-  // (Bekliyor/Takipte/Olumlu/Olumsuz) guncelleyebilecek, hatirlatma kurabilecek.
+  // (Açık/Olumlu/Olumsuz) guncelleyebilecek, hatirlatma kurabilecek.
   const atananDanisman = flow.advisors && flow.advisors.find((a) => a.number === agentNumber);
   const yeniLead = leadStore.yeniLeadOlustur({
     telefon: from,

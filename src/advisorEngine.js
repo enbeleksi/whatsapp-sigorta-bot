@@ -367,7 +367,7 @@ async function anaMenuGoster(from, session) {
   const danisman = danismaniBul(from);
   const acikLeadler = leadStore
     .tumLeadleriGetir()
-    .filter((l) => l.danismanNumarasi === from && (l.durum === "Bekliyor" || l.durum === "Takipte"));
+    .filter((l) => l.danismanNumarasi === from && l.durum === "Açık");
 
   session.state = "DANISMAN_LEAD_SECIMI";
   session.danismanLeadListesi = acikLeadler.map((l) => l.id);
@@ -380,9 +380,12 @@ async function anaMenuGoster(from, session) {
     return;
   }
 
+  // Durum artik tek ("Açık"), o yuzden ikon olarak durum yerine hatirlatma
+  // kurulu olup olmadigini gosteriyoruz - danisman icin daha faydali bir
+  // sinyal (hangi musteride ne zaman tekrar aranmasi gerektigini hatirlatir).
   const satirlar = acikLeadler.map((l) => {
-    const durumIkon = l.durum === "Bekliyor" ? "🟡" : "🔵";
-    return `${durumIkon} ${l.musteriAdi || l.telefon} (${l.urun})`;
+    const ikon = l.hatirlatma ? "⏰" : "⚪";
+    return `${ikon} ${l.musteriAdi || l.telefon} (${l.urun})`;
   });
 
   await sendList(

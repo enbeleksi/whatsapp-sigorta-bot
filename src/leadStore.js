@@ -1,7 +1,14 @@
 // Tamamlanan her sigorta talebini bir "kayit" (lead) olarak tutar ve takip
-// eder: hangi danisman sorumlu, durum ne (bekliyor/takipte/olumlu/olumsuz),
-// notlar ve hatirlatmalar. Panel ve advisorEngine.js bu modulu kullanarak
-// danismanlarin talepleri sonuclandirip sonuclandirmadigini gorur.
+// eder: hangi danisman sorumlu, durum ne (acik/olumlu/olumsuz), notlar ve
+// hatirlatmalar. Panel ve advisorEngine.js bu modulu kullanarak danismanlarin
+// talepleri sonuclandirip sonuclandirmadigini gorur.
+//
+// Durumlar bilinçli olarak sade tutuldu: bir talep kapanana kadar (olumlu ya
+// da olumsuz) tek bir "Açık" durumunda kalir. Eskiden "Bekliyor"/"Takipte"
+// diye ikiye ayriliyordu ama danismanlar icin ikisi arasindaki fark net
+// degildi - musterinin "ekim ayinda tekrar konusalim" dedigi durumlar zaten
+// hatirlatma sistemiyle (asagidaki hatirlatmaKur) karsilaniyor, ayri bir
+// "Takipte" durumuna gerek yok.
 //
 // Okuma/yazma hala hizli bellek-ici (in-memory) Map uzerinden yapilir. Ayrica
 // yukle()/kaydet() ile PostgreSQL'e periyodik yedeklenir (DATABASE_URL
@@ -12,7 +19,7 @@ const db = require("./db");
 const leads = new Map(); // id -> lead
 let sayac = 0;
 
-const DURUMLAR = ["Bekliyor", "Takipte", "Olumlu Kapandı", "Olumsuz Kapandı"];
+const DURUMLAR = ["Açık", "Olumlu Kapandı", "Olumsuz Kapandı"];
 
 function yeniLeadOlustur({ telefon, musteriAdi, urun, danismanAdi, danismanNumarasi, ozet }) {
   sayac += 1;
@@ -25,7 +32,7 @@ function yeniLeadOlustur({ telefon, musteriAdi, urun, danismanAdi, danismanNumar
     danismanAdi: danismanAdi || null,
     danismanNumarasi: danismanNumarasi || null,
     ozet,
-    durum: "Bekliyor",
+    durum: "Açık",
     notlar: [], // { metin, tarih }
     belgeler: [], // { dosyaAdi, mimeType, veriBase64, yuklenmeZamani }
     hatirlatma: null, // { zaman: timestamp, not: string, gonderildi: bool }
@@ -86,11 +93,6 @@ function hatirlatmaKur(id, zamanMs, not) {
   const lead = leads.get(id);
   if (!lead || !zamanMs) return null;
   lead.hatirlatma = { zaman: zamanMs, not: not || "", gonderildi: false };
-  // Hatirlatma kurulmasi, taleple aktif ilgilenildigini gosterir - durumu
-  // otomatik "Takipte" yapiyoruz (zaten "Bekliyor" ise).
-  if (lead.durum === "Bekliyor") {
-    lead.durum = "Takipte";
-  }
   lead.guncellenmeZamani = Date.now();
   return lead;
 }
@@ -123,7 +125,7 @@ function danismanIstatistikleri(danismanNumarasi) {
   const kapananToplam = olumluToplam + olumsuzToplam;
   const donusumOrani = kapananToplam > 0 ? Math.round((olumluToplam / kapananToplam) * 100) : null;
   const olumluBuAy = buAy.filter((l) => l.durum === "Olumlu Kapandı").length;
-  const acikSayisi = hepsi.filter((l) => l.durum === "Bekliyor" || l.durum === "Takipte").length;
+  const acikSayisi = hepsi.filter((l) => l.durum === "Açık").length;
 
   return {
     toplamTalep: hepsi.length,

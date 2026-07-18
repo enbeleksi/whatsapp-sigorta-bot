@@ -46,8 +46,7 @@
   .leadCard h4 { margin: 0 0 4px 0; font-size: 15px; }
   .leadCard .meta { font-size: 13px; color: #666; }
   .badge { display: inline-block; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; white-space: nowrap; }
-  .badge.Bekliyor { background: #E7EAEE; color: #4A5568; }
-  .badge.Takipte { background: #DCEEFB; color: #1668A1; }
+  .badge.Acik { background: #E7EAEE; color: #4A5568; }
   .badge.OlumluKapandi { background: #DCE3F0; color: #16324F; }
   .badge.OlumsuzKapandi { background: #F3DCE1; color: #7A1F35; }
   .leadCard .ozet { font-size: 12px; color: #555; background: #f7f7f7; padding: 8px 10px; border-radius: 6px; margin-top: 10px; white-space: pre-wrap; word-break: break-word; }
@@ -397,8 +396,7 @@ function formatTarih(ts) {
 
 function badgeClass(durum) {
   const harita = {
-    'Bekliyor': 'badge Bekliyor',
-    'Takipte': 'badge Takipte',
+    'Açık': 'badge Acik',
     'Olumlu Kapandı': 'badge OlumluKapandi',
     'Olumsuz Kapandı': 'badge OlumsuzKapandi'
   };
