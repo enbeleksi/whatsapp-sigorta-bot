@@ -65,6 +65,35 @@ function ruhsatSeriNoGecerliMi(value) {
   return /^[A-ZÇĞİÖŞÜ]{1,3}\s?\d{4,8}$/.test(v);
 }
 
+// GG.AA.YYYY formatinda, police yenileme/bitis tarihi gibi GELECEKTEKI
+// tarihleri de kabul eden bir kontrol (tarihGecerliMi'nin aksine gelecek
+// yillari reddetmez). Makul bir aralikta tutmak icin gecmiste 1 yil, ileride
+// 15 yila kadar olan tarihleri gecerli sayar.
+function yenilemeTarihiGecerliMi(value) {
+  const match = (value || "").trim().match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  if (!match) return false;
+  const gun = Number(match[1]);
+  const ay = Number(match[2]);
+  const yil = Number(match[3]);
+  const buYil = new Date().getFullYear();
+  if (yil < buYil - 1 || yil > buYil + 15) return false;
+  if (ay < 1 || ay > 12) return false;
+  const ayinGunSayisi = new Date(yil, ay, 0).getDate();
+  return gun >= 1 && gun <= ayinGunSayisi;
+}
+
+// GG.AA.YYYY formatindaki bir metni ogle 12:00'ye sabitlenmis bir zaman
+// damgasina (ms) cevirir - gun icinde saat dilimi kaymasi yuzunden yanlis
+// gune duşmesin diye ogle vakti kullaniliyor. Format hataliysa null doner.
+function tarihiMsYap(value) {
+  const match = (value || "").trim().match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  if (!match) return null;
+  const gun = Number(match[1]);
+  const ay = Number(match[2]);
+  const yil = Number(match[3]);
+  return new Date(yil, ay - 1, gun, 12, 0, 0).getTime();
+}
+
 module.exports = {
   tcKimlikGecerliMi,
   tarihGecerliMi,
@@ -72,5 +101,7 @@ module.exports = {
   pozitifSayiMi,
   yilGecerliMi,
   plakaGecerliMi,
-  ruhsatSeriNoGecerliMi
+  ruhsatSeriNoGecerliMi,
+  yenilemeTarihiGecerliMi,
+  tarihiMsYap
 };

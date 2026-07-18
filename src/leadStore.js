@@ -109,6 +109,32 @@ function hatirlatmaGonderildiIsaretle(id) {
   lead.hatirlatma.gonderildi = true;
 }
 
+// Bir danismanin kendi performans ozetini cikartir (WhatsApp'tan "Performansım"
+// menusu icin) - panel'deki /api/panel/stats ile ayni donusum orani mantigini
+// kullanir, sadece bu danismana ait taleplerle sinirlandirilmis haliyle.
+function danismanIstatistikleri(danismanNumarasi) {
+  const hepsi = tumLeadleriGetir().filter((l) => l.danismanNumarasi === danismanNumarasi);
+  const simdi = new Date();
+  const ayBaslangic = new Date(simdi.getFullYear(), simdi.getMonth(), 1).getTime();
+  const buAy = hepsi.filter((l) => l.olusturulmaZamani >= ayBaslangic);
+
+  const olumluToplam = hepsi.filter((l) => l.durum === "Olumlu Kapandı").length;
+  const olumsuzToplam = hepsi.filter((l) => l.durum === "Olumsuz Kapandı").length;
+  const kapananToplam = olumluToplam + olumsuzToplam;
+  const donusumOrani = kapananToplam > 0 ? Math.round((olumluToplam / kapananToplam) * 100) : null;
+  const olumluBuAy = buAy.filter((l) => l.durum === "Olumlu Kapandı").length;
+  const acikSayisi = hepsi.filter((l) => l.durum === "Bekliyor" || l.durum === "Takipte").length;
+
+  return {
+    toplamTalep: hepsi.length,
+    buAyTalep: buAy.length,
+    acikSayisi,
+    olumluToplam,
+    olumluBuAy,
+    donusumOrani
+  };
+}
+
 // Sunucu baslarken bir kez cagrilir - DB'de kayitli talepler varsa belleğe yukler.
 async function yukle() {
   const veri = await db.oku("leads");
@@ -137,6 +163,7 @@ module.exports = {
   hatirlatmaKur,
   zamaniGelenHatirlatmalar,
   hatirlatmaGonderildiIsaretle,
+  danismanIstatistikleri,
   yukle,
   kaydet
 };

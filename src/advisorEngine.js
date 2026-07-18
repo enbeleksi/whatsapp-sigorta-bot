@@ -9,11 +9,127 @@
 const { getSession } = require("./sessionStore");
 const { sendText, sendButtons, sendList, sendDocument, mediaIndir } = require("./loggedWhatsapp");
 const leadStore = require("./leadStore");
+const yenilemeStore = require("./yenilemeStore");
 const dokumanStore = require("./dokumanStore");
 const { dosyaTuruIzinliMi } = require("./izinliDosyaTurleri");
 const { garantiEmekliligeGonder } = require("./eposta");
+const {
+  tcKimlikGecerliMi,
+  tarihGecerliMi,
+  pozitifSayiMi,
+  plakaGecerliMi,
+  yenilemeTarihiGecerliMi,
+  tarihiMsYap
+} = require("./validators");
 const flows = require("./flows");
 const conversationEngine = require("./conversationEngine");
+
+// Elinde "Trafik Sigortası" ya da "Kasko Sigortası" gecen urun etiketleri
+// icin, yenileme eklerken ayrica plaka soruyoruz (diger urunlerde anlamsiz).
+const PLAKA_ISTENEN_URUN_ETIKETLERI = ["Trafik Sigortası", "Kasko Sigortası"];
+
+// Bir talebin/kaydin "urun" alanindaki serbest metinden (orn. "Standart Prim
+// İadeli Hayat Sigortası") hangi flows.js urunune ait oldugunu bulur -
+// Satis Kaydi gibi akislarda urun adi paket ismiyle birlestirilip
+// kaydedildigi icin tam esitlik yerine "icerir mi" kontrolu yapiyoruz.
+function flowBulUrunAdindan(urunAdi) {
+  if (!urunAdi) return null;
+  return Object.values(flows).find((f) => urunAdi.includes(f.label)) || null;
+}
+
+// --- Satis Kaydi: Prim Iadeli Hayat Sigortasi ---
+// Musteri urunu satin almaya karar verdikten SONRA (satis asamasi) doldurulan,
+// Garanti Emeklilik'in bekledigi tam formatta bilgi toplayan ayri bir akis.
+// Mevcut "Yeni Elementer Talebi" (teklif talebi) akisindan tamamen bagimsizdir.
+// NOT: Su an sadece Hayat sigortasi destekleniyor - BES daha sonra eklenecek.
+const REQUIRED_BELGELER_METNI =
+  "📄 Arkalı önlü kimlik fotokopisi\n📄 İmzalı teklif/başvuru formu\n📄 Yerleşim yeri belgesi";
+
+const SATIS_SORULARI_HAYAT = [
+  { id: "paket", text: "Hangi paket için satış kaydı oluşturuyorsunuz?", type: "choice", options: ["Standart", "Premium"] },
+  { id: "musteri_ad_soyad", text: "Müşterinin adını ve soyadını paylaşır mısınız?", type: "text" },
+  {
+    id: "sigortali_tck",
+    text: "Sigortalının T.C. kimlik numarasını paylaşır mısınız?",
+    type: "text",
+    validate: tcKimlikGecerliMi,
+    validationError: "Girilen T.C. kimlik numarası geçerli görünmüyor, lütfen 11 haneli olarak tekrar yazar mısınız?"
+  },
+  {
+    id: "sigortali_dogum_tarihi",
+    text: "Sigortalının doğum tarihini paylaşır mısınız? (GG.AA.YYYY)",
+    type: "text",
+    validate: tarihGecerliMi,
+    validationError: "Lütfen tarihi GG.AA.YYYY formatında yazar mısınız? (Örn: 04.08.1997)"
+  },
+  { id: "sigortali_uyruk", text: "Sigortalının uyruğunu paylaşır mısınız? (Örn: T.C.)", type: "text" },
+  { id: "sigortali_dogum_yeri", text: "Sigortalının doğum yerini paylaşır mısınız? (Örn: Adana)", type: "text" },
+  {
+    id: "odeyen_farkli_mi",
+    text: "Primi ödeyecek kişi sigortalının kendisi mi?",
+    type: "choice",
+    options: ["Evet, Kendisi", "Hayır, Farklı Biri"]
+  },
+  {
+    id: "odeyen_ad_soyad",
+    text: "Ödeyecek kişinin adını ve soyadını paylaşır mısınız?",
+    type: "text",
+    skipIf: (a) => a.odeyen_farkli_mi !== "Hayır, Farklı Biri"
+  },
+  {
+    id: "odeyen_tck",
+    text: "Ödeyecek kişinin T.C. kimlik numarasını paylaşır mısınız?",
+    type: "text",
+    validate: tcKimlikGecerliMi,
+    validationError: "Girilen T.C. kimlik numarası geçerli görünmüyor, lütfen 11 haneli olarak tekrar yazar mısınız?",
+    skipIf: (a) => a.odeyen_farkli_mi !== "Hayır, Farklı Biri"
+  },
+  {
+    id: "vefat_teminati",
+    text: "Hesaplayıcıdan bulduğunuz Vefat Teminatı tutarını paylaşır mısınız? (Örn: USD 638.954,07)",
+    type: "text"
+  },
+  {
+    id: "police_suresi",
+    text: "Poliçe süresini yıl olarak paylaşır mısınız? (Örn: 12)",
+    type: "text",
+    validate: pozitifSayiMi,
+    validationError: "Lütfen poliçe süresini sadece rakamla (yıl) yazar mısınız? (Örn: 12)"
+  },
+  { id: "odeme_araci", text: "Ödeme aracı nedir?", type: "choice", options: ["Kredi Kartı", "Garanti Bankası Hesabı"] },
+  {
+    id: "odeme_donemi",
+    text: "Ödeme dönemi nedir? (Poliçe süresi boyunca değiştirilemeyecek, dikkatli seçin)",
+    type: "choice",
+    options: ["Aylık", "Üç Aylık", "Altı Aylık", "Yıllık"]
+  },
+  {
+    id: "prim_tutari",
+    text: (a) => `Hesaplayıcıdan bulduğunuz ${a.odeme_donemi || ""} prim tutarını paylaşır mısınız? (Örn: USD 450,00)`,
+    type: "text"
+  },
+  { id: "sigortali_cep", text: "Sigortalının cep telefonu numarasını paylaşır mısınız?", type: "text" },
+  { id: "sigortali_eposta", text: "Sigortalının e-posta adresini paylaşır mısınız?", type: "text" },
+  {
+    id: "odeyen_cep",
+    text: "Ödeyecek kişinin cep telefonu numarasını paylaşır mısınız?",
+    type: "text",
+    skipIf: (a) => a.odeyen_farkli_mi !== "Hayır, Farklı Biri"
+  },
+  {
+    id: "odeyen_eposta",
+    text: "Ödeyecek kişinin e-posta adresini paylaşır mısınız?",
+    type: "text",
+    skipIf: (a) => a.odeyen_farkli_mi !== "Hayır, Farklı Biri"
+  },
+  {
+    id: "belgeler",
+    text:
+      `Son olarak şu belgeleri gönderir misiniz:\n${REQUIRED_BELGELER_METNI}\n\n` +
+      `Hepsini gönderdikten sonra "tamam" yazmanız yeterli. 📎`,
+    type: "coklu_belge"
+  }
+];
 
 // Danisman listesi tum urunlerde ayni referansi paylasir (flows.js'deki
 // DANISMANLAR sabiti), o yuzden herhangi bir urunden okuyabiliriz.
@@ -75,13 +191,26 @@ function tarihSaatDogrula(metin) {
 }
 
 // --- Karsilama (ana giris noktasi) ---
+const ANA_MENU_SECENEKLERI = [
+  "Yeni Elementer Talebi",
+  "BES Hayat Satış",
+  "Bekleyen İş",
+  "Destek Talebi Oluştur",
+  "Yaklaşan Yenilemeler",
+  "Yenileme Takibi Ekle",
+  "BES Fonları",
+  "Doküman Merkezi",
+  "Performansım"
+];
+
 async function karsilamaGoster(from, session) {
   const danisman = danismaniBul(from);
   session.state = "DANISMAN_KARSILAMA";
-  await sendButtons(
+  await sendList(
     from,
-    `Merhaba ${danisman ? danisman.name : ""}! 👋 Ne yapmak istersiniz?`,
-    ["Yeni Talep Oluştur", "Taleplerimi Gör", "Form İste"]
+    `Merhaba ${danisman ? danisman.name : ""}! 👋 Umarım gününüz güzel geçiyordur. WE Sigorta danışman asistanınız hazır — size bugün nasıl yardımcı olabilirim?`,
+    "Seçin",
+    ANA_MENU_SECENEKLERI
   );
 }
 
@@ -167,6 +296,90 @@ function sonrakiGecerliIndex(sorular, answers, baslangic) {
     break;
   }
   return idx;
+}
+
+// --- Satis kaydi akisi (Prim Iadeli Hayat Sigortasi) ---
+async function satisBaslat(from, session) {
+  session.satisAnswers = {};
+  session.satisBelgeler = [];
+  session.satisSoruIndex = sonrakiGecerliIndex(SATIS_SORULARI_HAYAT, session.satisAnswers, 0);
+  session.state = "DANISMAN_SATIS_SORU";
+  await sendText(
+    from,
+    "📝 Prim İadeli Hayat Sigortası satış kaydı başlatıyoruz. (Not: BES satış kaydı yakında eklenecek.)"
+  );
+  await satisSoruSor(from, session);
+}
+
+async function satisSoruSor(from, session) {
+  const soru = SATIS_SORULARI_HAYAT[session.satisSoruIndex];
+  const metin = typeof soru.text === "function" ? soru.text(session.satisAnswers) : soru.text;
+
+  if (soru.type === "choice") {
+    if (soru.options.length > 3) await sendList(from, metin, "Seçin", soru.options);
+    else await sendButtons(from, metin, soru.options);
+  } else {
+    await sendText(from, metin);
+  }
+}
+
+async function satisTamamla(from, session) {
+  const danisman = danismaniBul(from);
+  const a = session.satisAnswers;
+
+  const odeyenAyniMi = a.odeyen_farkli_mi !== "Hayır, Farklı Biri";
+  const odeyenAdSoyad = odeyenAyniMi ? a.musteri_ad_soyad : a.odeyen_ad_soyad;
+  const odeyenTck = odeyenAyniMi ? a.sigortali_tck : a.odeyen_tck;
+  const odeyenCep = odeyenAyniMi ? a.sigortali_cep : a.odeyen_cep;
+  const odeyenEposta = odeyenAyniMi ? a.sigortali_eposta : a.odeyen_eposta;
+  const urunAdiTam = `${a.paket} Prim İadeli Hayat Sigortası`;
+
+  const ozetSatirlari = [
+    `Ürün Adı: ${urunAdiTam}`,
+    `Müşteri Ad Soyad: ${a.musteri_ad_soyad}`,
+    `Sigortalı TCK No: ${a.sigortali_tck}`,
+    `Sigortalı Doğum Tarihi: ${a.sigortali_dogum_tarihi}`,
+    `Katılımcı Uyruk/Doğum Yeri: ${a.sigortali_uyruk} / ${a.sigortali_dogum_yeri}`,
+    `Ödeyen Ad Soyad TCK No: ${odeyenAdSoyad} ${odeyenTck}`,
+    `Dağıtım Kanalı Adı: EKŞİ GROUP`,
+    `Dağıtım Kanalı kodu: 329`,
+    `Vefat Teminatı: ${a.vefat_teminati}`,
+    `Poliçe Süresi: ${a.police_suresi} YIL`,
+    `Ödeme Aracı: ${a.odeme_araci}`,
+    `Aylık Prim Tutarı: ${a.prim_tutari}`,
+    `Ödeme Dönemi: ${a.odeme_donemi}`,
+    `Sigortalı Cep Telefonu: ${a.sigortali_cep}`,
+    `Sigortalı E-Posta: ${a.sigortali_eposta}`,
+    `Ödeyen Cep Telefonu: ${odeyenCep}`,
+    `Ödeyen E-Posta: ${odeyenEposta}`
+  ];
+
+  await garantiEmekliligeGonder({
+    urunAdi: urunAdiTam,
+    musteriAdi: a.musteri_ad_soyad,
+    telefon: a.sigortali_cep,
+    ozetSatirlari,
+    ekBelgeler: session.satisBelgeler,
+    konuFormati: "satis" // konu satirini "Urun Adi Musteri Adi" formatinda kurar
+  }).catch((err) => console.error("Garanti Emeklilik satis maili gonderilirken hata:", err.message));
+
+  // Panelde de gorunmesi icin lead olarak da kaydediyoruz.
+  const kompaktDetay = `[${danisman ? danisman.name : "Danışman"} tarafından oluşturuldu - SATIŞ] ${urunAdiTam} • ${ozetSatirlari.join(" • ")}`;
+  const yeniLead = leadStore.yeniLeadOlustur({
+    telefon: a.sigortali_cep,
+    musteriAdi: a.musteri_ad_soyad,
+    urun: urunAdiTam,
+    danismanAdi: danisman ? danisman.name : null,
+    danismanNumarasi: from,
+    ozet: kompaktDetay
+  });
+  session.satisBelgeler.forEach((belge) => leadStore.belgeEkle(yeniLead.id, belge));
+
+  await sendText(
+    from,
+    `Satış kaydı tamamlandı ✅ ${a.musteri_ad_soyad} için ${urunAdiTam} kaydı Garanti Emeklilik'e iletildi.`
+  );
+  await karsilamaGoster(from, session);
 }
 
 async function yeniTalepUrunSec(from, session) {
@@ -257,6 +470,163 @@ async function danismanYeniTalepiTamamla(from, session) {
   await karsilamaGoster(from, session);
 }
 
+// --- Performansım: danismanin kendi ozet istatistiklerini gosterir ---
+async function performansGoster(from, session) {
+  const istatistik = leadStore.danismanIstatistikleri(from);
+  const donusumMetni = istatistik.donusumOrani === null ? "henüz kapanan talep yok" : `%${istatistik.donusumOrani}`;
+
+  await sendText(
+    from,
+    `📊 Performansım\n\n` +
+      `Bu ay girilen talep: ${istatistik.buAyTalep}\n` +
+      `Bu ay kapanan satış: ${istatistik.olumluBuAy}\n` +
+      `Şu an açık talep: ${istatistik.acikSayisi}\n\n` +
+      `Toplam (tüm zamanlar):\n` +
+      `Talep: ${istatistik.toplamTalep}\n` +
+      `Satış: ${istatistik.olumluToplam}\n` +
+      `Dönüşüm oranı: ${donusumMetni}`
+  );
+  await karsilamaGoster(from, session);
+}
+
+// --- Destek Talebi: mevcut bir talebe bagli, ilgili kisiye aninda iletilen destek mesaji ---
+async function destekLeadSecimiGoster(from, session) {
+  const kendiLeadleri = leadStore.tumLeadleriGetir().filter((l) => l.danismanNumarasi === from);
+
+  if (kendiLeadleri.length === 0) {
+    await sendText(
+      from,
+      "Destek talebi oluşturmak için önce en az bir talebinizin olması gerekiyor. Önce 'Yeni Talep Oluştur' ile bir talep girebilirsiniz."
+    );
+    await karsilamaGoster(from, session);
+    return;
+  }
+
+  // WhatsApp interaktif liste en fazla 10 satir destekliyor, o yuzden en
+  // guncel 10 talep gosteriliyor.
+  const gosterilecekler = kendiLeadleri.slice(0, 10);
+  session.state = "DANISMAN_DESTEK_LEAD_SECIMI";
+  session.danismanDestekLeadListesi = gosterilecekler.map((l) => l.id);
+
+  const satirlar = gosterilecekler.map((l) => `${l.musteriAdi || l.telefon} (${l.urun}) - ${l.durum}`);
+  await sendList(from, "Hangi talep/müşteri ile ilgili destek almak istersiniz?", "Talep Seç", satirlar);
+}
+
+async function destekMetniIste(from, session, lead) {
+  session.state = "DANISMAN_DESTEK_METIN_BEKLE";
+  session.danismanDestekLeadId = lead.id;
+  await sendText(from, `${lead.musteriAdi || lead.telefon} (${lead.urun}) için ne konuda destek almak istersiniz? Kısaca yazar mısınız?`);
+}
+
+async function destekTalebiGonder(from, session, destekMetni) {
+  const lead = leadStore.leadGetir(session.danismanDestekLeadId);
+  if (!lead) {
+    await sendText(from, "İlgili talebi bulamadım, tekrar deneyebilir misiniz?");
+    await karsilamaGoster(from, session);
+    return;
+  }
+
+  const danisman = danismaniBul(from);
+  const danismanAdi = danisman ? danisman.name : "Bir danışman";
+  const flow = flowBulUrunAdindan(lead.urun);
+
+  const detay =
+    `🆘 Destek Talebi\n` +
+    `📌 ${danismanAdi} tarafından oluşturuldu.\n\n` +
+    `Müşteri: ${lead.musteriAdi || lead.telefon}\n` +
+    `Ürün: ${lead.urun}\n` +
+    `Telefon: ${lead.telefon}\n\n` +
+    `Mesaj: ${destekMetni}`;
+
+  leadStore.notEkle(lead.id, `🆘 Destek Talebi: ${destekMetni}`);
+
+  // Urune gore dogru kisiye (elementerde Bahadır, hayat/BES'te Enbel) +
+  // her zaman Enbel'e kopya olacak sekilde ayni guvenlik agi mantigi
+  // kullaniliyor (yeni talep bildirimindeki ile birebir ayni).
+  const birincilNumara = flow ? flow.agentNumber : process.env.AGENT_WHATSAPP_NUMBER;
+  const bildirilecekNumaralar = conversationEngine.guvenlikAgiNumaralari(flow || {}, birincilNumara);
+  bildirilecekNumaralar.delete(from);
+
+  for (const numara of bildirilecekNumaralar) {
+    await conversationEngine.bildirimGonder(numara, lead.urun, lead.musteriAdi || lead.telefon, lead.telefon, detay, detay);
+  }
+
+  await sendText(from, "Destek talebiniz iletildi ✅ En kısa sürede dönüş yapılacaktır.");
+  await karsilamaGoster(from, session);
+}
+
+// --- Yenileme Ekle: satis/talep akisindan bagimsiz, manuel police yenileme kaydi ---
+async function yenilemeBaslat(from, session) {
+  session.state = "DANISMAN_YENILEME_MUSTERI_BEKLE";
+  session.yenilemeVerisi = {};
+  await sendText(from, "Müşterinin adını ve soyadını paylaşır mısınız?");
+}
+
+async function yenilemeUrunSor(from, session) {
+  session.state = "DANISMAN_YENILEME_URUN_SEC";
+  const urunAnahtarlari = Object.keys(flows);
+  session.yenilemeUrunAnahtarlari = urunAnahtarlari;
+  const etiketler = urunAnahtarlari.map((k) => flows[k].menuLabel || flows[k].label);
+  await sendList(from, "Hangi ürünün yenilemesini eklemek istiyorsunuz?", "Ürün Seç", etiketler);
+}
+
+async function yenilemeTarihSor(from, session) {
+  session.state = "DANISMAN_YENILEME_TARIH_BEKLE";
+  await sendText(from, "Poliçenin yenileme/bitiş tarihini paylaşır mısınız? (GG.AA.YYYY formatında, örn: 12.09.2026)");
+}
+
+async function yenilemeTamamla(from, session) {
+  const danisman = danismaniBul(from);
+  const v = session.yenilemeVerisi;
+
+  const kayit = yenilemeStore.yeniYenilemeOlustur({
+    danismanNumarasi: from,
+    danismanAdi: danisman ? danisman.name : null,
+    musteriAdi: v.musteriAdi,
+    urun: v.urunLabel,
+    plaka: v.plaka || null,
+    bitisTarihi: v.bitisTarihiMs
+  });
+
+  const tarihMetni = new Date(kayit.bitisTarihi).toLocaleDateString("tr-TR");
+  await sendText(
+    from,
+    `Yenileme kaydı eklendi ✅ ${v.musteriAdi} - ${v.urunLabel}${v.plaka ? ` (${v.plaka})` : ""} - ${tarihMetni}\n\nBu tarih yaklaşınca "Yaklaşan Yenilemeler" menüsünden takip edebilirsiniz.`
+  );
+  await karsilamaGoster(from, session);
+}
+
+// --- Yaklaşan Yenilemeler: kendi yenileme kayitlarindan yaklasanlari listeler ---
+async function yenilemelerimGoster(from, session) {
+  const yaklasanlar = yenilemeStore.yaklasanYenilemeleriGetir(30, from);
+
+  if (yaklasanlar.length === 0) {
+    await sendText(from, "Önümüzdeki 30 gün içinde yaklaşan bir yenileme kaydınız yok. 🎉");
+    await karsilamaGoster(from, session);
+    return;
+  }
+
+  const simdi = Date.now();
+  const satirlar = yaklasanlar.map((y) => {
+    const ikon = y.bitisTarihi < simdi ? "🔴" : "🟡";
+    const tarihMetni = new Date(y.bitisTarihi).toLocaleDateString("tr-TR");
+    const plakaMetni = y.plaka ? ` (${y.plaka})` : "";
+    return `${ikon} ${y.musteriAdi} - ${y.urun}${plakaMetni} - ${tarihMetni}`;
+  });
+
+  await sendText(from, `📅 Yaklaşan Yenilemeler (30 gün)\n\n${satirlar.join("\n")}`);
+  await karsilamaGoster(from, session);
+}
+
+// --- BES Fonları Hakkında Bilgi: icerik henuz hazir degil, yer tutucu ---
+async function besFonBilgisiGoster(from, session) {
+  await sendText(
+    from,
+    "🛠️ Bu özellik hazırlanıyor. Garanti Emeklilik'teki güncel Bireysel Emeklilik fonlarının bilgileri (getiri, risk seviyesi vb.) eklendiğinde buradan görebileceksiniz."
+  );
+  await karsilamaGoster(from, session);
+}
+
 async function handleAdvisorMessage(from, parsed) {
   const session = getSession(from);
 
@@ -271,6 +641,31 @@ async function handleAdvisorMessage(from, parsed) {
       );
       return;
     }
+
+    // Satis kaydi akisinda, "coklu_belge" tipi soru bekleniyorsa (kimlik,
+    // form, yerlesim yeri belgesi gibi) belgeyi biriktiriyoruz.
+    if (session.state === "DANISMAN_SATIS_SORU") {
+      const soru = SATIS_SORULARI_HAYAT[session.satisSoruIndex];
+      if (soru && soru.type === "coklu_belge") {
+        try {
+          const { buffer, mimeType } = await mediaIndir(parsed.mediaId);
+          session.satisBelgeler.push({
+            dosyaAdi: parsed.dosyaAdi || `belge_${session.satisBelgeler.length + 1}`,
+            mimeType: parsed.mimeType || mimeType,
+            veriBase64: buffer.toString("base64")
+          });
+          await sendText(
+            from,
+            `📎 Belge alındı (${session.satisBelgeler.length}. belge). Diğer belgeleri gönderebilir, bitirdiyseniz "tamam" yazabilirsiniz.`
+          );
+        } catch (err) {
+          console.error("Satis belgesi indirilemedi:", err?.response?.data || err.message);
+          await sendText(from, "Belgeyi kaydederken bir sorun oluştu, tekrar gönderir misiniz?");
+        }
+        return;
+      }
+    }
+
     if (session.state === "DANISMAN_LEAD_DETAY" && session.danismanSeciliLeadId) {
       try {
         const { buffer, mimeType } = await mediaIndir(parsed.mediaId);
@@ -305,16 +700,40 @@ async function handleAdvisorMessage(from, parsed) {
 
   switch (session.state) {
     case "DANISMAN_KARSILAMA": {
-      if (userText === "Yeni Talep Oluştur") {
+      if (userText === "Yeni Elementer Talebi") {
         await yeniTalepUrunSec(from, session);
         return;
       }
-      if (userText === "Taleplerimi Gör") {
+      if (userText === "BES Hayat Satış") {
+        await satisBaslat(from, session);
+        return;
+      }
+      if (userText === "Bekleyen İş") {
         await anaMenuGoster(from, session);
         return;
       }
-      if (userText === "Form İste") {
+      if (userText === "Destek Talebi Oluştur") {
+        await destekLeadSecimiGoster(from, session);
+        return;
+      }
+      if (userText === "Yaklaşan Yenilemeler") {
+        await yenilemelerimGoster(from, session);
+        return;
+      }
+      if (userText === "Yenileme Takibi Ekle") {
+        await yenilemeBaslat(from, session);
+        return;
+      }
+      if (userText === "BES Fonları") {
+        await besFonBilgisiGoster(from, session);
+        return;
+      }
+      if (userText === "Doküman Merkezi") {
         await formUrunSec(from, session);
+        return;
+      }
+      if (userText === "Performansım") {
+        await performansGoster(from, session);
         return;
       }
       await karsilamaGoster(from, session);
@@ -525,6 +944,132 @@ async function handleAdvisorMessage(from, parsed) {
       } else {
         await danismanSoruSor(from, session);
       }
+      return;
+    }
+
+    // --- Satis kaydi akisi ---
+    case "DANISMAN_SATIS_SORU": {
+      const soru = SATIS_SORULARI_HAYAT[session.satisSoruIndex];
+
+      if (soru.type === "coklu_belge") {
+        const BITIRME_KELIMELERI = ["tamam", "bitti", "gonderdim", "hepsi bu", "tamamdir", "bu kadar"];
+        const bitirdiMi = BITIRME_KELIMELERI.some((k) => normalizeTr(userText || "").includes(k));
+        if (!bitirdiMi) {
+          await sendText(from, `Belge gönderebilirsiniz, bitirdiyseniz "tamam" yazmanız yeterli. 📎`);
+          return;
+        }
+        if (session.satisBelgeler.length === 0) {
+          await sendText(from, "Devam edebilmemiz için en az bir belge göndermeniz gerekiyor. 📎");
+          return;
+        }
+        await satisTamamla(from, session);
+        return;
+      }
+
+      if (soru.type === "choice") {
+        const secilen = matchOption(userText, soru.options);
+        if (!secilen) {
+          const metin = typeof soru.text === "function" ? soru.text(session.satisAnswers) : soru.text;
+          if (soru.options.length > 3) await sendList(from, metin, "Seçin", soru.options);
+          else await sendButtons(from, metin, soru.options);
+          return;
+        }
+        session.satisAnswers[soru.id] = secilen;
+      } else {
+        if (soru.validate && !soru.validate(userText)) {
+          const hint =
+            typeof soru.validationError === "function" ? soru.validationError(userText) : soru.validationError;
+          await sendText(from, hint || "Bu bilgi doğru formatta görünmüyor, lütfen tekrar dener misiniz?");
+          return;
+        }
+        session.satisAnswers[soru.id] = userText;
+      }
+
+      session.satisSoruIndex = sonrakiGecerliIndex(
+        SATIS_SORULARI_HAYAT,
+        session.satisAnswers,
+        session.satisSoruIndex + 1
+      );
+      await satisSoruSor(from, session);
+      return;
+    }
+
+    // --- Destek talebi akisi ---
+    case "DANISMAN_DESTEK_LEAD_SECIMI": {
+      if (parsed.type !== "interactive" || !parsed.interactiveId) {
+        await destekLeadSecimiGoster(from, session);
+        return;
+      }
+      const index = parseInt(parsed.interactiveId.replace("list_", ""), 10);
+      const leadId = (session.danismanDestekLeadListesi || [])[index];
+      const lead = leadId && leadStore.leadGetir(leadId);
+      if (!lead) {
+        await destekLeadSecimiGoster(from, session);
+        return;
+      }
+      await destekMetniIste(from, session, lead);
+      return;
+    }
+
+    case "DANISMAN_DESTEK_METIN_BEKLE": {
+      if (!userText) {
+        await sendText(from, "Sorununuzu kısaca yazar mısınız?");
+        return;
+      }
+      await destekTalebiGonder(from, session, userText);
+      return;
+    }
+
+    // --- Yenileme ekleme akisi ---
+    case "DANISMAN_YENILEME_MUSTERI_BEKLE": {
+      if (!userText) {
+        await sendText(from, "Müşterinin adını ve soyadını paylaşır mısınız?");
+        return;
+      }
+      session.yenilemeVerisi.musteriAdi = userText;
+      await yenilemeUrunSor(from, session);
+      return;
+    }
+
+    case "DANISMAN_YENILEME_URUN_SEC": {
+      if (parsed.type !== "interactive" || !parsed.interactiveId) {
+        await yenilemeUrunSor(from, session);
+        return;
+      }
+      const index = parseInt(parsed.interactiveId.replace("list_", ""), 10);
+      const urunKey = (session.yenilemeUrunAnahtarlari || [])[index];
+      if (!urunKey || !flows[urunKey]) {
+        await yenilemeUrunSor(from, session);
+        return;
+      }
+      session.yenilemeVerisi.urunLabel = flows[urunKey].label;
+
+      if (PLAKA_ISTENEN_URUN_ETIKETLERI.includes(flows[urunKey].label)) {
+        session.state = "DANISMAN_YENILEME_PLAKA_BEKLE";
+        await sendText(from, "Aracın plakasını paylaşır mısınız? (Örn: 34 ABC 123)");
+      } else {
+        await yenilemeTarihSor(from, session);
+      }
+      return;
+    }
+
+    case "DANISMAN_YENILEME_PLAKA_BEKLE": {
+      if (!plakaGecerliMi(userText)) {
+        await sendText(from, "Girilen plaka geçerli görünmüyor, lütfen tekrar yazar mısınız? (Örn: 34 ABC 123)");
+        return;
+      }
+      session.yenilemeVerisi.plaka = userText.trim().toUpperCase();
+      await yenilemeTarihSor(from, session);
+      return;
+    }
+
+    case "DANISMAN_YENILEME_TARIH_BEKLE": {
+      if (!yenilemeTarihiGecerliMi(userText)) {
+        await sendText(from, "Lütfen tarihi GG.AA.YYYY formatında yazar mısınız? (Örn: 12.09.2026)");
+        return;
+      }
+      session.yenilemeVerisi.bitisTarihiMs = tarihiMsYap(userText);
+      await yenilemeTamamla(from, session);
       return;
     }
 

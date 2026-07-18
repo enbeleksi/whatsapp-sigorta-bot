@@ -9,6 +9,7 @@ const { sendText, sendDocument, sendTemplate, sendAuthTemplate } = require("./lo
 const { sablonOlustur } = require("./whatsapp");
 const messageLog = require("./messageLog");
 const leadStore = require("./leadStore");
+const yenilemeStore = require("./yenilemeStore");
 const dokumanStore = require("./dokumanStore");
 const flows = require("./flows");
 const db = require("./db");
@@ -395,7 +396,7 @@ app.post("/api/panel/send-document", panelAuth, upload.single("dosya"), async (r
 });
 
 // --- Urun bazinda form/dokuman kutuphanesi ---
-// Danismanlar WhatsApp'tan "Form İste" ile bu dokumanlari istedigi an alabilir.
+// Danismanlar WhatsApp'tan "Doküman Merkezi" ile bu dokumanlari istedigi an alabilir.
 app.get("/api/panel/dokumanlar", panelAuth, (req, res) => {
   const urunler = Object.keys(flows).map((key) => {
     const dokuman = dokumanStore.dokumanGetir(key);
@@ -665,16 +666,25 @@ async function tumVeriyiKaydet() {
     sessionStore.kaydet().catch((err) => console.error("Oturumlar kaydedilemedi:", err.message)),
     leadStore.kaydet().catch((err) => console.error("Talepler kaydedilemedi:", err.message)),
     messageLog.kaydet().catch((err) => console.error("Mesaj gecmisi kaydedilemedi:", err.message)),
-    dokumanStore.kaydet().catch((err) => console.error("Dokumanlar kaydedilemedi:", err.message))
+    dokumanStore.kaydet().catch((err) => console.error("Dokumanlar kaydedilemedi:", err.message)),
+    yenilemeStore.kaydet().catch((err) => console.error("Yenilemeler kaydedilemedi:", err.message))
   ]);
 }
 
 async function baslat() {
-  await db.init();
+  // db.init() basarisiz olursa (orn. DATABASE_URL tanimli ama baglanti
+  // kurulamiyorsa) tum sunucunun ayaga kalkmasini engellememesi icin
+  // burada yakalaniyor - kalicilik olmadan, bellek-ici calismaya devam edilir.
+  try {
+    await db.init();
+  } catch (err) {
+    console.error("Veritabani baslatilamadi, kalicilik olmadan bellek-ici calisilacak:", err.message);
+  }
   await sessionStore.yukle();
   await leadStore.yukle();
   await messageLog.yukle();
   await dokumanStore.yukle();
+  await yenilemeStore.yukle();
 
   app.listen(PORT, () => {
     console.log(`Sunucu ${PORT} portunda calisiyor.`);
