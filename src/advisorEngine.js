@@ -20,13 +20,16 @@ const {
   tarihGecerliMi,
   plakaGecerliMi,
   yenilemeTarihiGecerliMi,
+  aramaTarihiGecerliMi,
+  aramaTarihiBugunMu,
   tarihiMsYap,
   bosDegilMi,
   adSoyadGecerliMi,
   telefonGecerliMi,
   epostaGecerliMi,
   primTutariGecerliMi,
-  saatAraligiGecerliMi
+  saatAraligiGecerliMi,
+  saatAraligiNormallestir
 } = require("./validators");
 const flows = require("./flows");
 const conversationEngine = require("./conversationEngine");
@@ -73,7 +76,17 @@ async function sabitSablonlariGonder(from) {
 }
 
 const SATIS_SORULARI_HAYAT = [
-  { id: "paket", text: "Hangi paket için satış kaydı oluşturuyorsunuz?", type: "choice", options: ["Standart", "Premium"] },
+  {
+    id: "paket",
+    text: "Hangi paket için satış kaydı oluşturuyorsunuz?",
+    type: "choice",
+    // "Standart"/"Premium" oldugu gibi mail'e gidiyor (urunAdiTam icinde,
+    // "Ürün Adı: Standart Prim İadeli Hayat Sigortası" gibi) - o yuzden bu
+    // degerleri degistirmiyoruz. Butonda asgari tutar bilgisini gostermek
+    // icin ayri bir kisaSecenekler tanimliyoruz.
+    options: ["Standart", "Premium"],
+    kisaSecenekler: ["Standart(min.150usd)", "Premium(min.300usd)"]
+  },
   {
     id: "musteri_ad_soyad",
     text: "Müşterinin adını ve soyadını paylaşır mısınız?",
@@ -147,11 +160,11 @@ const SATIS_SORULARI_HAYAT = [
     // kisaltip degistiremeyiz - bunun yerine dugmede gosterilecek kisa bir
     // etiket tanimlıyoruz, kaydedilen/mail'e giden deger yine tam metin oluyor
     // (bkz. satisSoruSor / DANISMAN_SATIS_SORU'daki kisaSecenekler kullanimi).
-    kisaSecenekler: ["Kredi Kartı", "Banka Hesabı"]
+    kisaSecenekler: ["Kredi Kartı", "Garanti Bank. Hesabı"]
   },
   {
     id: "odeme_donemi",
-    text: "Ödeme dönemi nedir? (Poliçe süresi boyunca değiştirilemeyecek, dikkatli seçin)",
+    text: "Ödeme dönemi nedir? (Not: poliçe süresi boyunca değiştirilemez.)",
     type: "choice",
     options: ["Aylık", "Üç Aylık", "Altı Aylık", "Yıllık"]
   },
@@ -207,18 +220,28 @@ const SATIS_SORULARI_HAYAT = [
   // satisTamamla'daki acilisMetni).
   {
     id: "arama_tarihi",
-    text: "Müşterinin hangi tarihte aranmasını istersiniz? (GG.AA.YYYY)",
+    text: "Müşterinin hangi tarihte aranmasını istersiniz? (GG.AA.YYYY, bugün ya da sonrası olmalı)",
     type: "text",
-    validate: yenilemeTarihiGecerliMi,
-    validationError: "Lütfen tarihi GG.AA.YYYY formatında yazar mısınız? (Örn: 21.07.2026)"
+    validate: aramaTarihiGecerliMi,
+    validationError:
+      "Geçmiş bir tarih için arama talep edemeyiz, lütfen bugün ya da sonraki bir tarih yazar mısınız? (GG.AA.YYYY, Örn: 21.07.2026)"
   },
   {
     id: "arama_saat_araligi",
-    text: "Hangi saat aralığında aranmasını istersiniz? (08:00-18:00 arası, Örn: 14:00-16:00)",
+    text: "Hangi saat aralığında aranmasını istersiniz? (08:00-18:00 arası, Örn: 14:00-16:00 ya da 16-18)",
     type: "text",
     validate: saatAraligiGecerliMi,
-    validationError:
-      "Aramalar sadece 08:00-18:00 arasında yapılabiliyor, lütfen bu aralıkta bir saat aralığı yazar mısınız? (Örn: 14:00-16:00)"
+    normalize: saatAraligiNormallestir,
+    validationError: (userText, answers) => {
+      if (answers && answers.arama_tarihi && aramaTarihiBugunMu(answers.arama_tarihi)) {
+        const simdi = new Date();
+        const enErken = new Date(simdi.getTime() + 2 * 60 * 60 * 1000);
+        const saat = String(enErken.getHours()).padStart(2, "0");
+        const dakika = String(enErken.getMinutes()).padStart(2, "0");
+        return `Bugün için en erken ${saat}:${dakika}'dan sonrasına arama talep edilebilir (aramaya yetişmesi için en az 2 saat gerekiyor), lütfen buna göre bir saat aralığı yazar mısınız?`;
+      }
+      return "Aramalar sadece 08:00-18:00 arasında yapılabiliyor, lütfen bu aralıkta bir saat aralığı yazar mısınız? (Örn: 14:00-16:00 ya da 16-18)";
+    }
   },
   // Son 5 soru: her biri tek bir belgenin FOTOĞRAFINI sırasıyla ister (PDF/
   // döküman değil - kamera ya da galeriden seçilen bir fotoğraf her zaman
@@ -236,7 +259,8 @@ const SATIS_SORULARI_HAYAT = [
       "İmzalı bir Açık Rıza Beyanı / KVKK aydınlatma-rıza metni. Üzerinde yazılı metin ve belgenin altında " +
       "el yazısıyla atılmış bir imza olmalı.",
     dosyaAdi: "acik_riza_beyani.jpg",
-    sablonGonder: true
+    sablonGonder: true,
+    imzaGerekli: true
   },
   {
     id: "belge_imza_karti",
@@ -245,7 +269,8 @@ const SATIS_SORULARI_HAYAT = [
     beklenenBelge:
       "İmzalı bir İletişim Bilgileri ve Islak İmza Kartı formu. Üzerinde iletişim bilgileri (ad, telefon, " +
       "adres vb.) ve el yazısıyla atılmış bir imza olmalı.",
-    dosyaAdi: "imza_karti.jpg"
+    dosyaAdi: "imza_karti.jpg",
+    imzaGerekli: true
   },
   {
     id: "belge_yerlesim_yeri",
@@ -362,6 +387,19 @@ async function karsilamaGoster(from, session) {
     "Seçin",
     ANA_MENU_SECENEKLERI
   );
+}
+
+// karsilamaGoster ile ayni menuyu gosterir, ama "Merhaba" selamlamasi olmadan -
+// danisman bir islemi (satis kaydi, destek talebi, not/hatirlatma vb.) yeni
+// tamamladiginda, hemen ardindan "Merhaba, gununuz nasil gidiyor" demek
+// sanki bastan basliyormus gibi garip kaciyordu. Bu yuzden bir sonuc/bilgi
+// mesaji gosterildikten SONRA ana menuye donerken karsilamaGoster yerine bu
+// fonksiyon kullaniliyor; gercek bir "merhaba" tetikleyicisinden (bkz. asagida
+// selamlasma regex'i) ya da bilinmeyen bir oturum durumundan (default case)
+// donuste ise hala karsilamaGoster (tam selamlama) kullaniliyor.
+async function devamMenuGoster(from, session) {
+  session.state = "DANISMAN_KARSILAMA";
+  await sendList(from, "Senin için yapabileceğim başka bir şey var mı? 😊", "Seçin", ANA_MENU_SECENEKLERI);
 }
 
 // --- Istenildigi an urun bazinda PDF form/dokuman gonderme ---
@@ -548,7 +586,7 @@ async function satisTamamla(from, session) {
       from,
       "Belgeler eksik olduğu için kaydı tamamlayamadım 😕 Lütfen belgeleri tekrar göndermeyi deneyin, sorun devam ederse bana ulaşın."
     );
-    await karsilamaGoster(from, session);
+    await devamMenuGoster(from, session);
     return;
   }
 
@@ -561,9 +599,14 @@ async function satisTamamla(from, session) {
       from,
       "Bazı bilgiler eksik göründüğü için kaydı tamamlayamadım 😕 Lütfen \"menü\" yazıp baştan tekrar deneyin, sorun devam ederse bana ulaşın."
     );
-    await karsilamaGoster(from, session);
+    await devamMenuGoster(from, session);
     return;
   }
+
+  // Belgeleri tek PDF'te birlestirip mail gondermek birkac saniye surebiliyor -
+  // danismana bu sirada bir seyler oluyor sinyali verelim (hem Hayat hem BES
+  // icin gecerli, cunku bu fonksiyon ikisi tarafindan da paylasiliyor).
+  await sendText(from, "Evraklarınızı hazırlıyorum, bir saniye... 📎");
 
   const danisman = danismaniBul(from);
   const a = session.satisAnswers;
@@ -625,7 +668,12 @@ async function satisTamamla(from, session) {
 
   const acilisMetni = `Müşterimizin ${a.arama_tarihi} tarihinde, ${a.arama_saat_araligi} saatleri arasında aranması ricadır.`;
 
-  await garantiEmekliligeGonder({
+  // Mail gonderim sonucunu artik BEKLIYORUZ (fire-and-forget degil) ki
+  // danismana dogru bir onay mesaji gosterebilelim - eskiden mail gitse de
+  // gitmese de (orn. OUTLOOK_EMAIL/OUTLOOK_APP_SIFRE Railway'de tanimli
+  // degilse ya da SMTP hata verirse) danismana hep "Garanti Emeklilik'e
+  // iletildi" deniyordu, bu yanlis bir onaydi.
+  const mailSonucu = await garantiEmekliligeGonder({
     urunAdi: urunAdiTam,
     musteriAdi: a.musteri_ad_soyad,
     telefon: a.sigortali_cep,
@@ -633,9 +681,14 @@ async function satisTamamla(from, session) {
     ekBelgeler,
     konuFormati: "satis", // konu satirini "Urun Adi Musteri Adi" formatinda kurar
     acilisMetni
-  }).catch((err) => console.error("Garanti Emeklilik satis maili gonderilirken hata:", err.message));
+  }).catch((err) => {
+    console.error("Garanti Emeklilik satis maili gonderilirken hata:", err.message);
+    return { basarili: false, sebep: err.message };
+  });
 
-  // Panelde de gorunmesi icin lead olarak da kaydediyoruz.
+  // Panelde de gorunmesi icin lead olarak da kaydediyoruz - mail basarisiz
+  // olsa bile bu kayit HER ZAMAN olusturulur, boylece belgeler/bilgiler
+  // kaybolmuyor ve panel uzerinden manuel takip edilebiliyor.
   const kompaktDetay = `[${danisman ? danisman.name : "Danışman"} tarafından oluşturuldu - SATIŞ] ${urunAdiTam} • ${ozetSatirlari.join(" • ")}`;
   const yeniLead = leadStore.yeniLeadOlustur({
     telefon: a.sigortali_cep,
@@ -647,11 +700,21 @@ async function satisTamamla(from, session) {
   });
   session.satisBelgeler.forEach((belge) => leadStore.belgeEkle(yeniLead.id, belge));
 
-  await sendText(
-    from,
-    `Satış kaydı tamamlandı ✅ ${a.musteri_ad_soyad} için ${urunAdiTam} kaydı Garanti Emeklilik'e iletildi.`
-  );
-  await karsilamaGoster(from, session);
+  if (mailSonucu && mailSonucu.basarili) {
+    await sendText(
+      from,
+      `Satış kaydı tamamlandı ✅ ${a.musteri_ad_soyad} için ${urunAdiTam} kaydı Garanti Emeklilik'e iletildi.`
+    );
+  } else {
+    console.error(
+      `Satis kaydi tamamlandi ama Garanti Emeklilik maili GONDERILEMEDI (${a.musteri_ad_soyad} - ${urunAdiTam}): ${mailSonucu ? mailSonucu.sebep : "bilinmeyen hata"}`
+    );
+    await sendText(
+      from,
+      `Satış kaydınız ve belgeleriniz sisteme kaydedildi ✅ ancak Garanti Emeklilik'e mail gönderirken bir sorun oluştu ⚠️ Bu kayıt panelde duruyor, ekibimiz kontrol edip manuel olarak iletecek - sizin ekstra bir şey yapmanıza gerek yok.`
+    );
+  }
+  await devamMenuGoster(from, session);
 }
 
 // "Yeni İş Talebi" sadece elementer branslar icindir (BES/Hayat icin ayri
@@ -744,7 +807,7 @@ async function danismanYeniTalepiTamamla(from, session) {
     from,
     `Talep başarıyla oluşturuldu ✅ ${musteriAdi} için ${flow.label} talebi kaydedildi ve ilgili kişilere iletildi.`
   );
-  await karsilamaGoster(from, session);
+  await devamMenuGoster(from, session);
 }
 
 // --- Performansım: danismanin kendi ozet istatistiklerini gosterir ---
@@ -763,7 +826,7 @@ async function performansGoster(from, session) {
       `Satış: ${istatistik.olumluToplam}\n` +
       `Dönüşüm oranı: ${donusumMetni}`
   );
-  await karsilamaGoster(from, session);
+  await devamMenuGoster(from, session);
 }
 
 // --- Destek Talebi: mevcut bir talebe bagli, ilgili kisiye aninda iletilen destek mesaji ---
@@ -775,7 +838,7 @@ async function destekLeadSecimiGoster(from, session) {
       from,
       "Destek talebi oluşturmak için önce en az bir talebinizin olması gerekiyor. Önce 'Yeni Talep Oluştur' ile bir talep girebilirsiniz."
     );
-    await karsilamaGoster(from, session);
+    await devamMenuGoster(from, session);
     return;
   }
 
@@ -799,7 +862,7 @@ async function destekTalebiGonder(from, session, destekMetni) {
   const lead = leadStore.leadGetir(session.danismanDestekLeadId);
   if (!lead) {
     await sendText(from, "İlgili talebi bulamadım, tekrar deneyebilir misiniz?");
-    await karsilamaGoster(from, session);
+    await devamMenuGoster(from, session);
     return;
   }
 
@@ -829,7 +892,7 @@ async function destekTalebiGonder(from, session, destekMetni) {
   }
 
   await sendText(from, "Destek talebiniz iletildi ✅ En kısa sürede dönüş yapılacaktır.");
-  await karsilamaGoster(from, session);
+  await devamMenuGoster(from, session);
 }
 
 // --- Yenileme Ekle: satis/talep akisindan bagimsiz, manuel police yenileme kaydi ---
@@ -870,7 +933,7 @@ async function yenilemeTamamla(from, session) {
     from,
     `Yenileme kaydı eklendi ✅ ${v.musteriAdi} - ${v.urunLabel}${v.plaka ? ` (${v.plaka})` : ""} - ${tarihMetni}\n\nBu tarih yaklaşınca "Yaklaşan Yenilemeler" menüsünden takip edebilirsiniz.`
   );
-  await karsilamaGoster(from, session);
+  await devamMenuGoster(from, session);
 }
 
 // --- Yaklaşan Yenilemeler: kendi yenileme kayitlarindan yaklasanlari listeler ---
@@ -879,7 +942,7 @@ async function yenilemelerimGoster(from, session) {
 
   if (yaklasanlar.length === 0) {
     await sendText(from, "Önümüzdeki 30 gün içinde yaklaşan bir yenileme kaydınız yok. 🎉");
-    await karsilamaGoster(from, session);
+    await devamMenuGoster(from, session);
     return;
   }
 
@@ -892,7 +955,7 @@ async function yenilemelerimGoster(from, session) {
   });
 
   await sendText(from, `📅 Yaklaşan Yenilemeler (30 gün)\n\n${satirlar.join("\n")}`);
-  await karsilamaGoster(from, session);
+  await devamMenuGoster(from, session);
 }
 
 // --- BES Fonları Hakkında Bilgi: icerik henuz hazir degil, yer tutucu ---
@@ -901,7 +964,7 @@ async function besFonBilgisiGoster(from, session) {
     from,
     "🛠️ Bu özellik hazırlanıyor. Garanti Emeklilik'teki güncel Bireysel Emeklilik fonlarının bilgileri (getiri, risk seviyesi vb.) eklendiğinde buradan görebileceksiniz."
   );
-  await karsilamaGoster(from, session);
+  await devamMenuGoster(from, session);
 }
 
 async function handleAdvisorMessage(from, parsed) {
@@ -922,7 +985,8 @@ async function handleAdvisorMessage(from, parsed) {
     // Satis kaydi akisinda, "tekli_foto_belge" tipi soru bekleniyorsa (KVKK
     // metni, imza karti, yerlesim yeri belgesi, kimlik on/arka yuz) belge
     // fotografini once Claude gorsel analiziyle kontrol edip (net mi, dogru
-    // belge mi) sonra kabul ediyoruz.
+    // belge mi, imzaGerekli isaretliyse gercekten doldurulup imzalanmis mi)
+    // sonra kabul ediyoruz.
     if (session.state === "DANISMAN_SATIS_SORU") {
       const soru = session.satisSorular[session.satisSoruIndex];
       if (soru && soru.type === "tekli_foto_belge") {
@@ -937,7 +1001,7 @@ async function handleAdvisorMessage(from, parsed) {
           await sendText(from, "Fotoğrafınızı inceliyorum, bir saniye... 🔍");
           let analiz = null;
           try {
-            analiz = await belgeFotografiAnalizEt(buffer, gercekMimeType, soru.beklenenBelge);
+            analiz = await belgeFotografiAnalizEt(buffer, gercekMimeType, soru.beklenenBelge, soru.imzaGerekli);
           } catch (err) {
             // Analiz basarisiz olursa (orn. ANTHROPIC_API_KEY tanimli degil ya
             // da gecici bir API sorunu) kontrolu atlayip belgeyi normal kabul
@@ -956,6 +1020,13 @@ async function handleAdvisorMessage(from, parsed) {
             await sendText(
               from,
               `Bu fotoğraf beklediğim belgeye benzemiyor 🤔 ${analiz.aciklama || ""}\n\nLütfen doğru belgenin fotoğrafını gönderir misiniz?`
+            );
+            return;
+          }
+          if (analiz && soru.imzaGerekli && !analiz.imzaliMi) {
+            await sendText(
+              from,
+              `Bu belge boş/imzasız bir şablon gibi görünüyor 🤔 ${analiz.aciklama || ""}\n\nLütfen müşteriye doldurtup imzalattığınız belgenin fotoğrafını gönderir misiniz?`
             );
             return;
           }
@@ -995,7 +1066,7 @@ async function handleAdvisorMessage(from, parsed) {
         });
         await sendText(from, "Belge talebe eklendi ✅");
         if (lead) await leadDetayGoster(from, session, lead);
-        else await karsilamaGoster(from, session);
+        else await devamMenuGoster(from, session);
       } catch (err) {
         console.error("Belge indirilemedi/eklenemedi:", err?.response?.data || err.message);
         await sendText(from, "Belgeyi kaydederken bir sorun oluştu, tekrar dener misiniz?");
@@ -1103,7 +1174,7 @@ async function handleAdvisorMessage(from, parsed) {
           from,
           "🛠️ BES Aktarım akışı yakında eklenecek. Şimdilik sadece Yeni İş için satış kaydı oluşturabiliyoruz."
         );
-        await karsilamaGoster(from, session);
+        await devamMenuGoster(from, session);
         return;
       }
       await sendButtons(from, "BES için Yeni İş mi, yoksa Aktarım mı?", ["Yeni İş", "Aktarım"]);
@@ -1137,7 +1208,7 @@ async function handleAdvisorMessage(from, parsed) {
           await sendText(from, "Formu gönderirken bir sorun oluştu, tekrar dener misiniz?");
         }
       }
-      await karsilamaGoster(from, session);
+      await devamMenuGoster(from, session);
       return;
     }
 
@@ -1185,7 +1256,7 @@ async function handleAdvisorMessage(from, parsed) {
       const lead = leadStore.notEkle(session.danismanSeciliLeadId, userText);
       await sendText(from, "Not eklendi ✅");
       if (lead) await leadDetayGoster(from, session, lead);
-      else await karsilamaGoster(from, session);
+      else await devamMenuGoster(from, session);
       return;
     }
 
@@ -1198,7 +1269,7 @@ async function handleAdvisorMessage(from, parsed) {
       const lead = leadStore.durumGuncelle(session.danismanSeciliLeadId, userText);
       await sendText(from, `Durum "${userText}" olarak güncellendi ✅`);
       if (userText === "Olumlu Kapandı" || userText === "Olumsuz Kapandı" || !lead) {
-        await karsilamaGoster(from, session);
+        await devamMenuGoster(from, session);
       } else {
         await leadDetayGoster(from, session, lead);
       }
@@ -1232,7 +1303,7 @@ async function handleAdvisorMessage(from, parsed) {
       );
       await sendText(from, "Hatırlatma kuruldu ⏰ Zamanı gelince otomatik haber vereceğim.");
       if (lead) await leadDetayGoster(from, session, lead);
-      else await karsilamaGoster(from, session);
+      else await devamMenuGoster(from, session);
       return;
     }
 
@@ -1340,13 +1411,15 @@ async function handleAdvisorMessage(from, parsed) {
         }
         session.satisAnswers[soru.id] = secilen;
       } else {
-        if (soru.validate && !soru.validate(userText)) {
+        if (soru.validate && !soru.validate(userText, session.satisAnswers)) {
           const hint =
-            typeof soru.validationError === "function" ? soru.validationError(userText) : soru.validationError;
+            typeof soru.validationError === "function"
+              ? soru.validationError(userText, session.satisAnswers)
+              : soru.validationError;
           await sendText(from, hint || "Bu bilgi doğru formatta görünmüyor, lütfen tekrar dener misiniz?");
           return;
         }
-        session.satisAnswers[soru.id] = userText;
+        session.satisAnswers[soru.id] = soru.normalize ? soru.normalize(userText, session.satisAnswers) : userText;
       }
 
       session.satisSoruIndex = sonrakiGecerliIndex(

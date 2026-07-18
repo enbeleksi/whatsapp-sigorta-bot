@@ -60,7 +60,7 @@ async function garantiEmekliligeGonder({
     console.warn(
       "OUTLOOK_EMAIL / OUTLOOK_APP_SIFRE tanimli degil - Garanti Emeklilik maili gonderilemedi."
     );
-    return;
+    return { basarili: false, sebep: "OUTLOOK_EMAIL / OUTLOOK_APP_SIFRE tanımlı değil" };
   }
 
   // TEST MODU: EPOSTA_TEST_ADRESI ortam degiskeni tanimliysa, mail Garanti
@@ -99,8 +99,10 @@ async function garantiEmekliligeGonder({
     console.log(
       `Garanti Emeklilik maili gonderildi (${testAdresi ? "TEST MODU: " + testAdresi : "GERCEK ALICILAR"}, ${attachments.length} ek): ${urunAdi} - ${musteriAdi}`
     );
+    return { basarili: true };
   } catch (err) {
     console.error("Garanti Emeklilik maili gonderilemedi:", err.message);
+    return { basarili: false, sebep: err.message };
   }
 }
 

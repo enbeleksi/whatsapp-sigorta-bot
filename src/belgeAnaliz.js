@@ -5,19 +5,34 @@
 //   2) Fotograf gercekten o adimda beklenen belge turune mi ait (orn.
 //      danisman yanlislikla baska bir belgenin fotografini gonderirse
 //      bunu yakalayip uyarabilmek icin)
+//   3) (SADECE imzaGerekli=true olan belgeler icin, orn. Acik Riza Beyani,
+//      Imza Karti) belge gercekten doldurulup imzalanmis mi, yoksa bos bir
+//      sablon/form mu gonderilmis - bu ayri, ACIK bir JSON alani olarak
+//      soruluyor cunku "dogru_belge_mi" alaninin kendi tanimi sadece belge
+//      TURUNUN eslesip eslesmedigini soruyor (bos bir Acik Riza Beyani
+//      sablonu da yine de bir "Acik Riza Beyani" turudur ve bu soruyu
+//      guvenilir bicimde yakalamiyordu - modelin bunu ayrica, net bir
+//      talimatla kontrol etmesi gerekiyor).
 //
 // ruhsatAnaliz.js'deki ile ayni Anthropic Vision API deseni kullanilir.
 // ANTHROPIC_API_KEY tanimli degilse ya da API bir hata donerse hata firlatir;
 // cagiran taraf (advisorEngine.js) bu durumda kontrolu atlayip belgeyi normal
 // kabul ediyor - boylece gecici bir API sorunu satis surecini tamamen
 // durdurmuyor.
-async function belgeFotografiAnalizEt(buffer, mimeType, beklenenBelgeAciklamasi) {
+async function belgeFotografiAnalizEt(buffer, mimeType, beklenenBelgeAciklamasi, imzaGerekli) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     throw new Error("ANTHROPIC_API_KEY tanimli degil - belge foto analizi devre disi.");
   }
 
   const base64 = buffer.toString("base64");
+
+  const imzaAlaniSorusu = imzaGerekli
+    ? ', "imzali_mi": true ya da false (BU ALANI DİKKATLİCE DEĞERLENDİR: bu belge türü elle doldurulmuş VE imzalanmış olmalı. ' +
+      'Eğer belge boş bir şablon/form görünümündeyse, imza kutusu boşsa, içinde "ÖRNEK"/"ISLAK İMZA ÖRNEĞİ" gibi bir ' +
+      "filigran ya da yer tutucu deseni varsa, ya da ad/tarih gibi doldurulması gereken alanlar boşsa false. " +
+      "Gerçek el yazısıyla atılmış bir imza ve doldurulmuş bilgiler varsa true.)"
+    : "";
 
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -43,8 +58,9 @@ async function belgeFotografiAnalizEt(buffer, mimeType, beklenenBelgeAciklamasi)
                 `Beklenen belge: ${beklenenBelgeAciklamasi}\n\n` +
                 "Bu fotoğrafı incele ve SADECE aşağıdaki JSON formatında cevap ver, başka hiçbir metin ekleme:\n" +
                 '{"net_mi": true ya da false (fotoğraf bulanık, karanlık ya da okunaksızsa false), ' +
-                '"dogru_belge_mi": true ya da false (fotoğraf yukarıda tarif edilen belge türüyle eşleşmiyorsa false), ' +
-                '"aciklama": "sorun varsa kısa ve danışmana yönelik nazik bir açıklama (Türkçe), sorun yoksa boş string"}'
+                '"dogru_belge_mi": true ya da false (fotoğraf yukarıda tarif edilen belge türüyle eşleşmiyorsa false)' +
+                imzaAlaniSorusu +
+                ', "aciklama": "sorun varsa kısa ve danışmana yönelik nazik bir açıklama (Türkçe), sorun yoksa boş string"}'
             }
           ]
         }
@@ -63,6 +79,9 @@ async function belgeFotografiAnalizEt(buffer, mimeType, beklenenBelgeAciklamasi)
   return {
     netMi: sonuc.net_mi !== false,
     dogruBelgeMi: sonuc.dogru_belge_mi !== false,
+    // imzaGerekli=false ise bu alan hic sorulmadi (sonuc.imzali_mi undefined
+    // gelir) - bu durumda kontrol atlanmis sayilir ve true doner.
+    imzaliMi: imzaGerekli ? sonuc.imzali_mi !== false : true,
     aciklama: sonuc.aciklama || ""
   };
 }

@@ -131,25 +131,112 @@ function primTutariGecerliMi(value) {
   return v.length > 0 && /\d/.test(v);
 }
 
-// Garanti Emeklilik cagri merkezinin musteriyi aramasi istenen saat araligi:
-// "SS:DD-SS:DD" (orn. "14:00-16:00", araya bosluk konulmasi da kabul edilir).
-// Cagri merkezi sadece 08:00-18:00 arasi calistigi icin, girilen araligin bu
-// pencerenin icinde ve baslangicin bitisten once oldugundan da emin oluyoruz.
+// Musterinin "ne zaman aranmasini istiyoruz" tarihini kontrol eder: bugunden
+// ONCEKI bir tarih kabul edilmez (gecmis bir tarihte arama talep etmenin
+// anlami yok), bugun ve sonrasi (makul bir ust sinira kadar) kabul edilir.
+function aramaTarihiGecerliMi(value) {
+  const match = (value || "").trim().match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  if (!match) return false;
+  const gun = Number(match[1]);
+  const ay = Number(match[2]);
+  const yil = Number(match[3]);
+  const buYil = new Date().getFullYear();
+  if (yil < buYil || yil > buYil + 2) return false;
+  if (ay < 1 || ay > 12) return false;
+  const ayinGunSayisi = new Date(yil, ay, 0).getDate();
+  if (gun < 1 || gun > ayinGunSayisi) return false;
+
+  const girilenTarih = new Date(yil, ay - 1, gun);
+  girilenTarih.setHours(0, 0, 0, 0);
+  const bugun = new Date();
+  bugun.setHours(0, 0, 0, 0);
+
+  return girilenTarih.getTime() >= bugun.getTime();
+}
+
+// value'daki tarih (GG.AA.YYYY) bugune mi denk geliyor kontrol eder.
+function aramaTarihiBugunMu(value) {
+  const match = (value || "").trim().match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  if (!match) return false;
+  const gun = Number(match[1]);
+  const ay = Number(match[2]);
+  const yil = Number(match[3]);
+  const bugun = new Date();
+  return gun === bugun.getDate() && ay === bugun.getMonth() + 1 && yil === bugun.getFullYear();
+}
+
+// Garanti Emeklilik cagri merkezinin musteriyi aramasi istenen saat araligi.
+// Yaziliş bicimi konusunda esnek davraniyoruz cunku danismanlar hizlica
+// yaziyor: saat-dakika ayraci olarak ":" ya da "." kabul edilir ("14:00" ya
+// da "14.00"), dakika hic yazilmadan sadece saat de yazilabilir ("16-18"),
+// sonuna "arası" gibi bir kelime eklenmesi de sorun olmaz. Cagri merkezi
+// sadece 08:00-18:00 arasi calistigi icin, girilen araligin bu pencerenin
+// icinde ve baslangicin bitisten once oldugundan da emin oluyoruz.
 const ARAMA_PENCERESI_BASLANGIC_DK = 8 * 60; // 08:00
 const ARAMA_PENCERESI_BITIS_DK = 18 * 60; // 18:00
 
-function saatAraligiGecerliMi(value) {
-  const v = (value || "").trim();
-  const eslesme = v.match(/^([01]\d|2[0-3]):([0-5]\d)\s*-\s*([01]\d|2[0-3]):([0-5]\d)$/);
-  if (!eslesme) return false;
+// value'yu { baslangicDk, bitisDk } seklinde ayristirir (gun icindeki dakika
+// olarak), tanimlanamiyorsa null doner. Hem validasyonda hem de kaydedilecek
+// degeri "HH:MM-HH:MM" seklinde normallestirmek icin kullanilir (bkz.
+// saatAraligiNormallestir).
+function saatAraligiParseEt(value) {
+  const v = (value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s*aras[ıi]\s*$/i, "")
+    .trim();
 
-  const baslangicDk = Number(eslesme[1]) * 60 + Number(eslesme[2]);
-  const bitisDk = Number(eslesme[3]) * 60 + Number(eslesme[4]);
+  // "SS:DD-SS:DD" ya da "SS.DD-SS.DD" (dakika belirtilmis)
+  let eslesme = v.match(/^([01]?\d|2[0-3])[.:]([0-5]\d)\s*-\s*([01]?\d|2[0-3])[.:]([0-5]\d)$/);
+  if (eslesme) {
+    return {
+      baslangicDk: Number(eslesme[1]) * 60 + Number(eslesme[2]),
+      bitisDk: Number(eslesme[3]) * 60 + Number(eslesme[4])
+    };
+  }
 
+  // "SS-SS" (sadece saat, dakikasiz - orn. "16-18")
+  eslesme = v.match(/^([01]?\d|2[0-3])\s*-\s*([01]?\d|2[0-3])$/);
+  if (eslesme) {
+    return {
+      baslangicDk: Number(eslesme[1]) * 60,
+      bitisDk: Number(eslesme[2]) * 60
+    };
+  }
+
+  return null;
+}
+
+function saatAraligiGecerliMi(value, answers) {
+  const parsed = saatAraligiParseEt(value);
+  if (!parsed) return false;
+
+  const { baslangicDk, bitisDk } = parsed;
   if (baslangicDk >= bitisDk) return false;
   if (baslangicDk < ARAMA_PENCERESI_BASLANGIC_DK || bitisDk > ARAMA_PENCERESI_BITIS_DK) return false;
 
+  // Secilen arama tarihi bugunse, aramanin baslangici su andan en az 2 saat
+  // sonra olmali - cagri merkezine yetismeyecek kadar yakin bir saat
+  // araligi girilmesini engeller.
+  if (answers && answers.arama_tarihi && aramaTarihiBugunMu(answers.arama_tarihi)) {
+    const simdi = new Date();
+    const simdiDk = simdi.getHours() * 60 + simdi.getMinutes();
+    if (baslangicDk < simdiDk + 120) return false;
+  }
+
   return true;
+}
+
+// Gecerliligi onaylanmis (saatAraligiGecerliMi === true) bir degeri, gorunumden
+// bagimsiz olarak her zaman "HH:MM-HH:MM" seklinde tek tip bir metne cevirir -
+// mail'e giden deger, danismanin "16-18" mi "16.00-18.00 arası" mi yazdigindan
+// bagimsiz olarak hep ayni temiz formatta olsun diye.
+function saatAraligiNormallestir(value) {
+  const parsed = saatAraligiParseEt(value);
+  if (!parsed) return value;
+  const ikiHane = (n) => String(n).padStart(2, "0");
+  const bicimle = (dk) => `${ikiHane(Math.floor(dk / 60))}:${ikiHane(dk % 60)}`;
+  return `${bicimle(parsed.baslangicDk)}-${bicimle(parsed.bitisDk)}`;
 }
 
 module.exports = {
@@ -161,11 +248,14 @@ module.exports = {
   plakaGecerliMi,
   ruhsatSeriNoGecerliMi,
   yenilemeTarihiGecerliMi,
+  aramaTarihiGecerliMi,
+  aramaTarihiBugunMu,
   tarihiMsYap,
   bosDegilMi,
   adSoyadGecerliMi,
   telefonGecerliMi,
   epostaGecerliMi,
   primTutariGecerliMi,
-  saatAraligiGecerliMi
+  saatAraligiGecerliMi,
+  saatAraligiNormallestir
 };
