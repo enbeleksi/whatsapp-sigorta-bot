@@ -561,6 +561,28 @@ app.post("/webhook", async (req, res) => {
 
     console.log(`Webhook mesaji alindi: from=${message.from} type=${message.type} id=${message.id}`);
 
+    // Meta, sunucumuz zamaninda 200 donemedigi durumlarda (orn. tam o anda
+    // Railway restart oluyorsa) AYNI mesaji saatler hatta bir gun boyunca,
+    // aralikli olarak tekrar teslim etmeye calisir. mesajDahaOnceIslendiMi()
+    // bunu bellek-ici bir listeyle engelliyor ama bu liste her restart'ta
+    // sifirlaniyor - restart tam o araliga denk gelirse tekrar eden mesaj
+    // "yeni" sanilip ikinci (hatta ucuncu, dorduncu...) kez islenebiliyor.
+    // Bunun onune gecmek icin, mesajin ORIJINAL gonderilme zamanini (Meta
+    // her mesajda "timestamp" olarak yolluyor, saniye cinsinden Unix zamani)
+    // kontrol edip belli bir sureden daha eskiyse (gecikmis bir tekrar
+    // deneme oldugu neredeyse kesin) hic islemeden atliyoruz.
+    const MESAJ_GECERLILIK_SURESI_MS = 5 * 60 * 1000; // 5 dakika
+    if (message.timestamp) {
+      const mesajZamaniMs = Number(message.timestamp) * 1000;
+      const yasMs = Date.now() - mesajZamaniMs;
+      if (!Number.isNaN(mesajZamaniMs) && yasMs > MESAJ_GECERLILIK_SURESI_MS) {
+        console.log(
+          `Eski/gecikmis webhook mesaji atlandi (Meta'nin tekrar deneme mesaji olabilir): id=${message.id}, yas=${Math.round(yasMs / 60000)} dk`
+        );
+        return;
+      }
+    }
+
     if (mesajDahaOnceIslendiMi(message.id)) {
       console.log("Tekrarlanan webhook mesaji atlandi:", message.id);
       return;

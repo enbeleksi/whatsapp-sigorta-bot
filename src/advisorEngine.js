@@ -6,6 +6,8 @@
 // bu modulu cagirir - musteri akisina (conversationEngine) hic girmez,
 // tamamen ayri bir menu sistemidir.
 
+const fs = require("fs");
+const path = require("path");
 const { getSession } = require("./sessionStore");
 const { sendText, sendButtons, sendList, sendDocument, mediaIndir } = require("./loggedWhatsapp");
 const leadStore = require("./leadStore");
@@ -16,7 +18,6 @@ const { garantiEmekliligeGonder } = require("./eposta");
 const {
   tcKimlikGecerliMi,
   tarihGecerliMi,
-  pozitifSayiMi,
   plakaGecerliMi,
   yenilemeTarihiGecerliMi,
   tarihiMsYap
@@ -37,13 +38,36 @@ function flowBulUrunAdindan(urunAdi) {
   return Object.values(flows).find((f) => urunAdi.includes(f.label)) || null;
 }
 
-// --- Satis Kaydi: Prim Iadeli Hayat Sigortasi ---
+// --- Satis Kaydi: Prim Iadeli Hayat Sigortasi / BES (Yeni Is) ---
 // Musteri urunu satin almaya karar verdikten SONRA (satis asamasi) doldurulan,
 // Garanti Emeklilik'in bekledigi tam formatta bilgi toplayan ayri bir akis.
-// Mevcut "Yeni Elementer Talebi" (teklif talebi) akisindan tamamen bagimsizdir.
-// NOT: Su an sadece Hayat sigortasi destekleniyor - BES daha sonra eklenecek.
+// Mevcut "Yeni İş Talebi" (teklif talebi) akisindan tamamen bagimsizdir.
+// NOT: BES'te "Aktarım" henuz desteklenmiyor - sadece "Yeni İş" calisiyor,
+// Aktarım secilirse yakinda eklenecegi soylenip ana menuye donuluyor.
 const REQUIRED_BELGELER_METNI =
-  "📄 Arkalı önlü kimlik fotokopisi\n📄 İmzalı teklif/başvuru formu\n📄 Yerleşim yeri belgesi";
+  "📄 Kimliğin ön yüzü\n📄 Kimliğin arka yüzü\n📄 İmzalı Açık Rıza Beyanı (yukarıda gönderdiğim şablonu " +
+  "müşteriye yazdırıp imzalatabilirsiniz)\n📄 İmzalı İletişim Bilgileri ve Islak İmza Kartı (yukarıdaki diğer " +
+  "şablon)\n📄 Yerleşim yeri belgesi";
+
+// Belgeler adimina gelindiginde, danismanin musteriye yazdirip imzalatmasi
+// icin Garanti'nin bos sablon formlarini (Acik Riza Metni + Imza Karti)
+// otomatik olarak gonderiyoruz - boylece danisman bunlari ayrica aramak
+// zorunda kalmiyor.
+const SABIT_SABLONLAR = [
+  { dosyaYolu: path.join(__dirname, "sablonlar", "acik_riza_metni.pdf"), dosyaAdi: "Garanti Açık Rıza Metni.pdf" },
+  { dosyaYolu: path.join(__dirname, "sablonlar", "imza_karti.pdf"), dosyaAdi: "İletişim Bilgileri ve Islak İmza Kartı.pdf" }
+];
+
+async function sabitSablonlariGonder(from) {
+  for (const sablon of SABIT_SABLONLAR) {
+    try {
+      const buffer = fs.readFileSync(sablon.dosyaYolu);
+      await sendDocument(from, buffer, "application/pdf", sablon.dosyaAdi);
+    } catch (err) {
+      console.error(`Sabit sablon gonderilemedi (${sablon.dosyaAdi}):`, err.message);
+    }
+  }
+}
 
 const SATIS_SORULARI_HAYAT = [
   { id: "paket", text: "Hangi paket için satış kaydı oluşturuyorsunuz?", type: "choice", options: ["Standart", "Premium"] },
@@ -84,18 +108,6 @@ const SATIS_SORULARI_HAYAT = [
     validationError: "Girilen T.C. kimlik numarası geçerli görünmüyor, lütfen 11 haneli olarak tekrar yazar mısınız?",
     skipIf: (a) => a.odeyen_farkli_mi !== "Hayır, Farklı Biri"
   },
-  {
-    id: "vefat_teminati",
-    text: "Hesaplayıcıdan bulduğunuz Vefat Teminatı tutarını paylaşır mısınız? (Örn: USD 638.954,07)",
-    type: "text"
-  },
-  {
-    id: "police_suresi",
-    text: "Poliçe süresini yıl olarak paylaşır mısınız? (Örn: 12)",
-    type: "text",
-    validate: pozitifSayiMi,
-    validationError: "Lütfen poliçe süresini sadece rakamla (yıl) yazar mısınız? (Örn: 12)"
-  },
   { id: "odeme_araci", text: "Ödeme aracı nedir?", type: "choice", options: ["Kredi Kartı", "Garanti Bankası Hesabı"] },
   {
     id: "odeme_donemi",
@@ -130,6 +142,10 @@ const SATIS_SORULARI_HAYAT = [
     type: "coklu_belge"
   }
 ];
+
+// BES (Yeni İş) soru listesi, Hayat listesiyle birebir ayni - sadece "paket"
+// sorusu haric (BES'te paket ayrimi yok). Boylece iki liste hep senkron kalir.
+const SATIS_SORULARI_BES_YENI_IS = SATIS_SORULARI_HAYAT.filter((soru) => soru.id !== "paket");
 
 // Danisman listesi tum urunlerde ayni referansi paylasir (flows.js'deki
 // DANISMANLAR sabiti), o yuzden herhangi bir urunden okuyabiliriz.
@@ -192,7 +208,7 @@ function tarihSaatDogrula(metin) {
 
 // --- Karsilama (ana giris noktasi) ---
 const ANA_MENU_SECENEKLERI = [
-  "Yeni Elementer Talebi",
+  "Yeni İş Talebi",
   "BES Hayat Satış",
   "Bekleyen İş",
   "Destek Talebi Oluştur",
@@ -299,20 +315,38 @@ function sonrakiGecerliIndex(sorular, answers, baslangic) {
 }
 
 // --- Satis kaydi akisi (Prim Iadeli Hayat Sigortasi) ---
+// "BES Hayat Satış" ilk once hangi urun oldugunu soruyor (Hayat/BES), BES
+// secilirse ayrica Yeni İş mi Aktarım mi oldugunu soruyor - Aktarım henuz
+// desteklenmedigi icin secilirse bir "yakinda" mesaji gosterip ana menuye
+// donuluyor.
 async function satisBaslat(from, session) {
+  session.state = "DANISMAN_SATIS_URUN_SEC";
+  await sendButtons(
+    from,
+    "Hangi ürün için satış kaydı oluşturuyorsunuz?",
+    ["Prim İadeli Hayat Sigortası", "Bireysel Emeklilik Sistemi (BES)"]
+  );
+}
+
+function satisAkisiBaslat(from, session, urunTipi, sorular) {
+  session.satisUrunTipi = urunTipi; // "hayat" | "bes_yeni_is"
+  session.satisSorular = sorular;
   session.satisAnswers = {};
   session.satisBelgeler = [];
-  session.satisSoruIndex = sonrakiGecerliIndex(SATIS_SORULARI_HAYAT, session.satisAnswers, 0);
+  session.satisSoruIndex = sonrakiGecerliIndex(sorular, session.satisAnswers, 0);
   session.state = "DANISMAN_SATIS_SORU";
-  await sendText(
-    from,
-    "📝 Prim İadeli Hayat Sigortası satış kaydı başlatıyoruz. (Not: BES satış kaydı yakında eklenecek.)"
-  );
-  await satisSoruSor(from, session);
+  return satisSoruSor(from, session);
 }
 
 async function satisSoruSor(from, session) {
-  const soru = SATIS_SORULARI_HAYAT[session.satisSoruIndex];
+  const soru = session.satisSorular[session.satisSoruIndex];
+
+  // Belgeler adimina ilk gelindiginde, danismanin musteriye yazdirip
+  // imzalatmasi icin Garanti'nin bos sablon formlarini once gonderiyoruz.
+  if (soru.type === "coklu_belge") {
+    await sabitSablonlariGonder(from);
+  }
+
   const metin = typeof soru.text === "function" ? soru.text(session.satisAnswers) : soru.text;
 
   if (soru.type === "choice") {
@@ -326,13 +360,15 @@ async function satisSoruSor(from, session) {
 async function satisTamamla(from, session) {
   const danisman = danismaniBul(from);
   const a = session.satisAnswers;
+  const urunTipi = session.satisUrunTipi;
 
   const odeyenAyniMi = a.odeyen_farkli_mi !== "Hayır, Farklı Biri";
   const odeyenAdSoyad = odeyenAyniMi ? a.musteri_ad_soyad : a.odeyen_ad_soyad;
   const odeyenTck = odeyenAyniMi ? a.sigortali_tck : a.odeyen_tck;
   const odeyenCep = odeyenAyniMi ? a.sigortali_cep : a.odeyen_cep;
   const odeyenEposta = odeyenAyniMi ? a.sigortali_eposta : a.odeyen_eposta;
-  const urunAdiTam = `${a.paket} Prim İadeli Hayat Sigortası`;
+  const urunAdiTam =
+    urunTipi === "hayat" ? `${a.paket} Prim İadeli Hayat Sigortası` : "Bireysel Emeklilik Sistemi (BES) - Yeni İş";
 
   const ozetSatirlari = [
     `Ürün Adı: ${urunAdiTam}`,
@@ -343,11 +379,15 @@ async function satisTamamla(from, session) {
     `Ödeyen Ad Soyad TCK No: ${odeyenAdSoyad} ${odeyenTck}`,
     `Dağıtım Kanalı Adı: EKŞİ GROUP`,
     `Dağıtım Kanalı kodu: 329`,
-    `Vefat Teminatı: ${a.vefat_teminati}`,
-    `Poliçe Süresi: ${a.police_suresi} YIL`,
+    // Poliçe süresi artik sorulmuyor - Hayat'ta her zaman 12 yil varsayiliyor.
+    ...(urunTipi === "hayat" ? [`Poliçe Süresi: 12 YIL`] : []),
     `Ödeme Aracı: ${a.odeme_araci}`,
     `Aylık Prim Tutarı: ${a.prim_tutari}`,
     `Ödeme Dönemi: ${a.odeme_donemi}`,
+    // Vefat teminati artik danismana sorulmuyor - prim tutarindan yola
+    // cikarak ekip tarafindan web sitesinden hesaplanacak, o yuzden burada
+    // sadece bir hatirlatma satiri birakiyoruz.
+    ...(urunTipi === "hayat" ? [`Vefat Teminatı: (prim tutarına göre ekip tarafından hesaplanacak)`] : []),
     `Sigortalı Cep Telefonu: ${a.sigortali_cep}`,
     `Sigortalı E-Posta: ${a.sigortali_eposta}`,
     `Ödeyen Cep Telefonu: ${odeyenCep}`,
@@ -382,9 +422,14 @@ async function satisTamamla(from, session) {
   await karsilamaGoster(from, session);
 }
 
+// "Yeni İş Talebi" sadece elementer branslar icindir (BES/Hayat icin ayri
+// "BES Hayat Satış" akisi var) - o yuzden burada sadece agentNumber'i
+// Bahadır olan (elementer) urunler listeleniyor.
+const BAHADIR_NUMARASI = "905380711711";
+
 async function yeniTalepUrunSec(from, session) {
   session.state = "DANISMAN_YENI_URUN_SEC";
-  const urunAnahtarlari = Object.keys(flows);
+  const urunAnahtarlari = Object.keys(flows).filter((k) => flows[k].agentNumber === BAHADIR_NUMARASI);
   session.danismanUrunAnahtarlari = urunAnahtarlari;
   const etiketler = urunAnahtarlari.map((k) => flows[k].menuLabel || flows[k].label);
   await sendList(from, "Hangi ürün için yeni bir talep oluşturmak istersiniz?", "Ürün Seç", etiketler);
@@ -645,7 +690,7 @@ async function handleAdvisorMessage(from, parsed) {
     // Satis kaydi akisinda, "coklu_belge" tipi soru bekleniyorsa (kimlik,
     // form, yerlesim yeri belgesi gibi) belgeyi biriktiriyoruz.
     if (session.state === "DANISMAN_SATIS_SORU") {
-      const soru = SATIS_SORULARI_HAYAT[session.satisSoruIndex];
+      const soru = session.satisSorular[session.satisSoruIndex];
       if (soru && soru.type === "coklu_belge") {
         try {
           const { buffer, mimeType } = await mediaIndir(parsed.mediaId);
@@ -700,7 +745,7 @@ async function handleAdvisorMessage(from, parsed) {
 
   switch (session.state) {
     case "DANISMAN_KARSILAMA": {
-      if (userText === "Yeni Elementer Talebi") {
+      if (userText === "Yeni İş Talebi") {
         await yeniTalepUrunSec(from, session);
         return;
       }
@@ -737,6 +782,41 @@ async function handleAdvisorMessage(from, parsed) {
         return;
       }
       await karsilamaGoster(from, session);
+      return;
+    }
+
+    // --- Satis kaydi: urun secimi (Hayat / BES) ---
+    case "DANISMAN_SATIS_URUN_SEC": {
+      if (userText === "Prim İadeli Hayat Sigortası") {
+        await sendText(from, "📝 Prim İadeli Hayat Sigortası satış kaydı başlatıyoruz.");
+        await satisAkisiBaslat(from, session, "hayat", SATIS_SORULARI_HAYAT);
+        return;
+      }
+      if (userText === "Bireysel Emeklilik Sistemi (BES)") {
+        session.state = "DANISMAN_SATIS_BES_TIP_SEC";
+        await sendButtons(from, "BES için Yeni İş mi, yoksa Aktarım mı?", ["Yeni İş", "Aktarım"]);
+        return;
+      }
+      await satisBaslat(from, session);
+      return;
+    }
+
+    // --- Satis kaydi: BES icin Yeni Is / Aktarim secimi ---
+    case "DANISMAN_SATIS_BES_TIP_SEC": {
+      if (userText === "Yeni İş") {
+        await sendText(from, "📝 Bireysel Emeklilik Sistemi (BES) - Yeni İş satış kaydı başlatıyoruz.");
+        await satisAkisiBaslat(from, session, "bes_yeni_is", SATIS_SORULARI_BES_YENI_IS);
+        return;
+      }
+      if (userText === "Aktarım") {
+        await sendText(
+          from,
+          "🛠️ BES Aktarım akışı yakında eklenecek. Şimdilik sadece Yeni İş için satış kaydı oluşturabiliyoruz."
+        );
+        await karsilamaGoster(from, session);
+        return;
+      }
+      await sendButtons(from, "BES için Yeni İş mi, yoksa Aktarım mı?", ["Yeni İş", "Aktarım"]);
       return;
     }
 
@@ -949,7 +1029,7 @@ async function handleAdvisorMessage(from, parsed) {
 
     // --- Satis kaydi akisi ---
     case "DANISMAN_SATIS_SORU": {
-      const soru = SATIS_SORULARI_HAYAT[session.satisSoruIndex];
+      const soru = session.satisSorular[session.satisSoruIndex];
 
       if (soru.type === "coklu_belge") {
         const BITIRME_KELIMELERI = ["tamam", "bitti", "gonderdim", "hepsi bu", "tamamdir", "bu kadar"];
@@ -986,11 +1066,15 @@ async function handleAdvisorMessage(from, parsed) {
       }
 
       session.satisSoruIndex = sonrakiGecerliIndex(
-        SATIS_SORULARI_HAYAT,
+        session.satisSorular,
         session.satisAnswers,
         session.satisSoruIndex + 1
       );
-      await satisSoruSor(from, session);
+      if (session.satisSoruIndex >= session.satisSorular.length) {
+        await satisTamamla(from, session);
+      } else {
+        await satisSoruSor(from, session);
+      }
       return;
     }
 
