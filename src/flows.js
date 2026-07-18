@@ -459,7 +459,12 @@ module.exports = {
         danismanText:
           "Sigortalı kaskosunu düzenli olarak her yıl yeniliyor mu, yoksa bir süredir kaskosuz mu?",
         type: "choice",
-        options: ["Düzenli Yeniliyorum", "Bir Süredir Kaskosuzum"]
+        // "Bir Süredir Kaskosuzum" 22 karakterdi, WhatsApp'in dugme siniri
+        // olan 20'yi asiyordu - "Kaskosuzum" olarak kisalttik (skipIf
+        // asagida da guncellendi). Bu deger sadece bu akis icinde
+        // kullanildigi icin (Garanti Emeklilik gibi disaridan tam metin
+        // bekleyen bir sistem yok) kisaltmak guvenli.
+        options: ["Düzenli Yeniliyorum", "Kaskosuzum"]
       },
       {
         id: "arac_fotograflari",
@@ -473,7 +478,7 @@ module.exports = {
           "Aracın her yönünden (ön, arka, sağ, sol) birer fotoğraf, ayrıca ön camdan görünen şasi numarasının " +
           "fotoğrafını gönderir misiniz? Plaka fotoğraflarda net görünsün. Bitirince \"tamam\" yazmanız yeterli. 📸",
         type: "coklu_foto",
-        skipIf: (answers) => answers.kasko_durumu !== "Bir Süredir Kaskosuzum"
+        skipIf: (answers) => answers.kasko_durumu !== "Kaskosuzum"
       },
       { ...SEHIR_SORU },
       { ...MESLEK_SORU },

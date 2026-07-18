@@ -137,7 +137,18 @@ const SATIS_SORULARI_HAYAT = [
     validationError: "Girilen T.C. kimlik numarası geçerli görünmüyor, lütfen 11 haneli olarak tekrar yazar mısınız?",
     skipIf: (a) => a.odeyen_farkli_mi !== "Hayır, Farklı Biri"
   },
-  { id: "odeme_araci", text: "Ödeme aracı nedir?", type: "choice", options: ["Kredi Kartı", "Garanti Bankası Hesabı"] },
+  {
+    id: "odeme_araci",
+    text: "Ödeme aracı nedir?",
+    type: "choice",
+    options: ["Kredi Kartı", "Garanti Bankası Hesabı"],
+    // "Garanti Bankası Hesabı" 22 karakter, WhatsApp'in dugme siniri olan 20'yi
+    // asiyor. Bu deger oldugu gibi maile gittigi icin ("Ödeme Aracı: ...")
+    // kisaltip degistiremeyiz - bunun yerine dugmede gosterilecek kisa bir
+    // etiket tanimlıyoruz, kaydedilen/mail'e giden deger yine tam metin oluyor
+    // (bkz. satisSoruSor / DANISMAN_SATIS_SORU'daki kisaSecenekler kullanimi).
+    kisaSecenekler: ["Kredi Kartı", "Banka Hesabı"]
+  },
   {
     id: "odeme_donemi",
     text: "Ödeme dönemi nedir? (Poliçe süresi boyunca değiştirilemeyecek, dikkatli seçin)",
@@ -440,6 +451,24 @@ function sonrakiGecerliIndex(sorular, answers, baslangic) {
   return idx;
 }
 
+// "choice" tipi bir satis sorusuna gelen cevabi, o sorunun tam/kanonik
+// degerlerinden (soru.options) birine cozer. Soruda kisaSecenekler
+// tanimliysa (WhatsApp'in 20 karakter dugme sinirini asan uzun degerler
+// icin - orn. "Garanti Bankası Hesabı") once kisa etiketlere karsi
+// eslestirip, eslesen index uzerinden tam degeri (options[index]) donduruyoruz
+// - boylece dugmede kisa metin gorunse de kaydedilen/mail'e giden deger hep
+// tam metin oluyor.
+function secilenSecenegiCoz(userText, soru) {
+  if (soru.kisaSecenekler) {
+    const kisaEslesen = matchOption(userText, soru.kisaSecenekler);
+    if (kisaEslesen) {
+      const idx = soru.kisaSecenekler.indexOf(kisaEslesen);
+      return soru.options[idx];
+    }
+  }
+  return matchOption(userText, soru.options);
+}
+
 // Satis kaydi (Hayat / BES Yeni İş / ileride Aktarım) tamamlanmadan once son
 // bir guvenlik kontrolu: atlanmayan (skipIf/danismandaGizle olmayan) HER
 // sorunun gercekten cevaplanmis oldugundan emin oluyoruz. Normalde akis zaten
@@ -463,13 +492,17 @@ function eksikBilgiVarMi(sorular, answers) {
 // secilirse ayrica Yeni İş mi Aktarım mi oldugunu soruyor - Aktarım henuz
 // desteklenmedigi icin secilirse bir "yakinda" mesaji gosterip ana menuye
 // donuluyor.
+// NOT: WhatsApp dugme basliklarini 20 karakterle sinirliyor, o yuzden burada
+// kisa etiketler ("Hayat Sigortası" / "BES") kullaniyoruz - tam urun adi
+// ("Prim İadeli Hayat Sigortası" / "Bireysel Emeklilik Sistemi (BES)")
+// mail'e giderken ayri bir yerden (satisTamamla'daki urunAdiTam,
+// session.satisUrunTipi bayragindan kuruluyor) geldigi icin bu kisaltma
+// mail iceriğini etkilemiyor.
+const SATIS_URUN_SECENEKLERI = ["Hayat Sigortası", "BES"];
+
 async function satisBaslat(from, session) {
   session.state = "DANISMAN_SATIS_URUN_SEC";
-  await sendButtons(
-    from,
-    "Hangi ürün için satış kaydı oluşturuyorsunuz?",
-    ["Prim İadeli Hayat Sigortası", "Bireysel Emeklilik Sistemi (BES)"]
-  );
+  await sendButtons(from, "Hangi ürün için satış kaydı oluşturuyorsunuz?", SATIS_URUN_SECENEKLERI);
 }
 
 function satisAkisiBaslat(from, session, urunTipi, sorular) {
@@ -494,8 +527,12 @@ async function satisSoruSor(from, session) {
   const metin = typeof soru.text === "function" ? soru.text(session.satisAnswers) : soru.text;
 
   if (soru.type === "choice") {
-    if (soru.options.length > 3) await sendList(from, metin, "Seçin", soru.options);
-    else await sendButtons(from, metin, soru.options);
+    // kisaSecenekler varsa (bkz. odeme_araci) butonda/liste'de o gosterilir -
+    // kaydedilen deger yine soru.options'taki tam metin olur (bkz. asagida
+    // DANISMAN_SATIS_SORU case'indeki cozumleme).
+    const gosterilecekler = soru.kisaSecenekler || soru.options;
+    if (gosterilecekler.length > 3) await sendList(from, metin, "Seçin", gosterilecekler);
+    else await sendButtons(from, metin, gosterilecekler);
   } else {
     await sendText(from, metin);
   }
@@ -972,16 +1009,30 @@ async function handleAdvisorMessage(from, parsed) {
     return;
   }
 
-  const userText = parsed.type === "text" ? parsed.text.trim() : parsed.interactiveTitle;
+  let userText = parsed.type === "text" ? parsed.text.trim() : parsed.interactiveTitle;
 
-  // Her zaman "menu"/"iptal"/"geri" yazarak karsilama ekranina donulebilir.
-  if (parsed.type === "text" && /^(men[uü]|iptal|geri|evet)$/i.test(userText || "")) {
+  // Her zaman "menu"/"iptal"/"geri" ya da bir selamlasma ("merhaba" vb.)
+  // yazarak karsilama ekranina donulebilir. Selamlasma kelimelerinin de bu
+  // listede olmasi onemli: danisman uzun bir aradan sonra tekrar yazdiginda
+  // (orn. eski bir alt akisin - Bekleyen Is listesi gibi - ortasinda takili
+  // kalmis bir oturuma "merhaba" derse) once sicak bir karsilamayla
+  // baslamasi lazim, kaldigi yerden (ilgisiz eski bir ekranla) devam etmesi
+  // degil.
+  if (
+    parsed.type === "text" &&
+    /^(men[uü]|iptal|geri|evet|merhaba|selam|slm|mrb|hey|hi|hello|g[uü]naydin|iyi g[uü]nler)$/i.test(userText || "")
+  ) {
     await karsilamaGoster(from, session);
     return;
   }
 
   switch (session.state) {
     case "DANISMAN_KARSILAMA": {
+      // WhatsApp'in dugme/liste basliklarini kestigi durumlarda (asagida
+      // aciklandigi gibi) geri gelen metin orijinal secenekle birebir
+      // eslesmeyebilir - matchOption ile (kismi/onek eslesmesi) dogru
+      // secenegi geri buluyoruz.
+      userText = matchOption(userText, ANA_MENU_SECENEKLERI) || userText;
       if (userText === "Yeni İş Talebi") {
         await yeniTalepUrunSec(from, session);
         return;
@@ -1024,12 +1075,13 @@ async function handleAdvisorMessage(from, parsed) {
 
     // --- Satis kaydi: urun secimi (Hayat / BES) ---
     case "DANISMAN_SATIS_URUN_SEC": {
-      if (userText === "Prim İadeli Hayat Sigortası") {
+      userText = matchOption(userText, SATIS_URUN_SECENEKLERI) || userText;
+      if (userText === "Hayat Sigortası") {
         await sendText(from, "📝 Prim İadeli Hayat Sigortası satış kaydı başlatıyoruz.");
         await satisAkisiBaslat(from, session, "hayat", SATIS_SORULARI_HAYAT);
         return;
       }
-      if (userText === "Bireysel Emeklilik Sistemi (BES)") {
+      if (userText === "BES") {
         session.state = "DANISMAN_SATIS_BES_TIP_SEC";
         await sendButtons(from, "BES için Yeni İş mi, yoksa Aktarım mı?", ["Yeni İş", "Aktarım"]);
         return;
@@ -1040,6 +1092,7 @@ async function handleAdvisorMessage(from, parsed) {
 
     // --- Satis kaydi: BES icin Yeni Is / Aktarim secimi ---
     case "DANISMAN_SATIS_BES_TIP_SEC": {
+      userText = matchOption(userText, ["Yeni İş", "Aktarım"]) || userText;
       if (userText === "Yeni İş") {
         await sendText(from, "📝 Bireysel Emeklilik Sistemi (BES) - Yeni İş satış kaydı başlatıyoruz.");
         await satisAkisiBaslat(from, session, "bes_yeni_is", SATIS_SORULARI_BES_YENI_IS);
@@ -1105,6 +1158,7 @@ async function handleAdvisorMessage(from, parsed) {
     }
 
     case "DANISMAN_LEAD_DETAY": {
+      userText = matchOption(userText, ["Not Ekle", "Durum Değiştir", "Hatırlatma Kur"]) || userText;
       if (userText === "Not Ekle") {
         session.state = "DANISMAN_NOT_BEKLE";
         await sendText(from, "Notunuzu yazar mısınız?");
@@ -1136,6 +1190,7 @@ async function handleAdvisorMessage(from, parsed) {
     }
 
     case "DANISMAN_DURUM_BEKLE": {
+      userText = matchOption(userText, leadStore.DURUMLAR) || userText;
       if (!leadStore.DURUMLAR.includes(userText)) {
         await sendList(from, "Lütfen listeden bir durum seçin:", "Durum Seç", leadStore.DURUMLAR);
         return;
@@ -1275,11 +1330,12 @@ async function handleAdvisorMessage(from, parsed) {
       }
 
       if (soru.type === "choice") {
-        const secilen = matchOption(userText, soru.options);
+        const secilen = secilenSecenegiCoz(userText, soru);
         if (!secilen) {
           const metin = typeof soru.text === "function" ? soru.text(session.satisAnswers) : soru.text;
-          if (soru.options.length > 3) await sendList(from, metin, "Seçin", soru.options);
-          else await sendButtons(from, metin, soru.options);
+          const gosterilecekler = soru.kisaSecenekler || soru.options;
+          if (gosterilecekler.length > 3) await sendList(from, metin, "Seçin", gosterilecekler);
+          else await sendButtons(from, metin, gosterilecekler);
           return;
         }
         session.satisAnswers[soru.id] = secilen;
