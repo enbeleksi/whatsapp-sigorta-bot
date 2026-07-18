@@ -20,10 +20,18 @@ const {
   tarihGecerliMi,
   plakaGecerliMi,
   yenilemeTarihiGecerliMi,
-  tarihiMsYap
+  tarihiMsYap,
+  bosDegilMi,
+  adSoyadGecerliMi,
+  telefonGecerliMi,
+  epostaGecerliMi,
+  primTutariGecerliMi,
+  saatAraligiGecerliMi
 } = require("./validators");
 const flows = require("./flows");
 const conversationEngine = require("./conversationEngine");
+const { belgeleriTekPdfeBirlestir } = require("./pdfBirlestir");
+const { belgeFotografiAnalizEt } = require("./belgeAnaliz");
 
 // Elinde "Trafik Sigortası" ya da "Kasko Sigortası" gecen urun etiketleri
 // icin, yenileme eklerken ayrica plaka soruyoruz (diger urunlerde anlamsiz).
@@ -44,11 +52,6 @@ function flowBulUrunAdindan(urunAdi) {
 // Mevcut "Yeni İş Talebi" (teklif talebi) akisindan tamamen bagimsizdir.
 // NOT: BES'te "Aktarım" henuz desteklenmiyor - sadece "Yeni İş" calisiyor,
 // Aktarım secilirse yakinda eklenecegi soylenip ana menuye donuluyor.
-const REQUIRED_BELGELER_METNI =
-  "📄 Kimliğin ön yüzü\n📄 Kimliğin arka yüzü\n📄 İmzalı Açık Rıza Beyanı (yukarıda gönderdiğim şablonu " +
-  "müşteriye yazdırıp imzalatabilirsiniz)\n📄 İmzalı İletişim Bilgileri ve Islak İmza Kartı (yukarıdaki diğer " +
-  "şablon)\n📄 Yerleşim yeri belgesi";
-
 // Belgeler adimina gelindiginde, danismanin musteriye yazdirip imzalatmasi
 // icin Garanti'nin bos sablon formlarini (Acik Riza Metni + Imza Karti)
 // otomatik olarak gonderiyoruz - boylece danisman bunlari ayrica aramak
@@ -71,7 +74,13 @@ async function sabitSablonlariGonder(from) {
 
 const SATIS_SORULARI_HAYAT = [
   { id: "paket", text: "Hangi paket için satış kaydı oluşturuyorsunuz?", type: "choice", options: ["Standart", "Premium"] },
-  { id: "musteri_ad_soyad", text: "Müşterinin adını ve soyadını paylaşır mısınız?", type: "text" },
+  {
+    id: "musteri_ad_soyad",
+    text: "Müşterinin adını ve soyadını paylaşır mısınız?",
+    type: "text",
+    validate: adSoyadGecerliMi,
+    validationError: "Lütfen adı ve soyadı birlikte yazar mısınız? (Örn: Ahmet Yılmaz)"
+  },
   {
     id: "sigortali_tck",
     text: "Sigortalının T.C. kimlik numarasını paylaşır mısınız?",
@@ -86,8 +95,26 @@ const SATIS_SORULARI_HAYAT = [
     validate: tarihGecerliMi,
     validationError: "Lütfen tarihi GG.AA.YYYY formatında yazar mısınız? (Örn: 04.08.1997)"
   },
-  { id: "sigortali_uyruk", text: "Sigortalının uyruğunu paylaşır mısınız? (Örn: T.C.)", type: "text" },
-  { id: "sigortali_dogum_yeri", text: "Sigortalının doğum yerini paylaşır mısınız? (Örn: Adana)", type: "text" },
+  {
+    id: "sigortali_cinsiyet",
+    text: "Sigortalının cinsiyeti nedir?",
+    type: "choice",
+    options: ["Kadın", "Erkek"]
+  },
+  {
+    id: "sigortali_uyruk",
+    text: "Sigortalının uyruğunu paylaşır mısınız? (Örn: T.C.)",
+    type: "text",
+    validate: bosDegilMi,
+    validationError: "Bu alanı boş bırakamayız, lütfen sigortalının uyruğunu paylaşır mısınız?"
+  },
+  {
+    id: "sigortali_dogum_yeri",
+    text: "Sigortalının doğum yerini paylaşır mısınız? (Örn: Adana)",
+    type: "text",
+    validate: bosDegilMi,
+    validationError: "Bu alanı boş bırakamayız, lütfen sigortalının doğum yerini paylaşır mısınız?"
+  },
   {
     id: "odeyen_farkli_mi",
     text: "Primi ödeyecek kişi sigortalının kendisi mi?",
@@ -98,6 +125,8 @@ const SATIS_SORULARI_HAYAT = [
     id: "odeyen_ad_soyad",
     text: "Ödeyecek kişinin adını ve soyadını paylaşır mısınız?",
     type: "text",
+    validate: adSoyadGecerliMi,
+    validationError: "Lütfen adı ve soyadı birlikte yazar mısınız? (Örn: Ahmet Yılmaz)",
     skipIf: (a) => a.odeyen_farkli_mi !== "Hayır, Farklı Biri"
   },
   {
@@ -118,34 +147,128 @@ const SATIS_SORULARI_HAYAT = [
   {
     id: "prim_tutari",
     text: (a) => `Hesaplayıcıdan bulduğunuz ${a.odeme_donemi || ""} prim tutarını paylaşır mısınız? (Örn: USD 450,00)`,
-    type: "text"
+    type: "text",
+    validate: primTutariGecerliMi,
+    validationError: "Bu bir prim tutarı gibi görünmüyor, lütfen rakamla birlikte tekrar yazar mısınız? (Örn: USD 450,00)"
   },
-  { id: "sigortali_cep", text: "Sigortalının cep telefonu numarasını paylaşır mısınız?", type: "text" },
-  { id: "sigortali_eposta", text: "Sigortalının e-posta adresini paylaşır mısınız?", type: "text" },
+  // Sadece Hayat'ta soruluyor (BES listesine dahil edilmiyor, asagida
+  // SATIS_SORULARI_BES_YENI_IS filtrelemesine bakin) - vefat teminatini
+  // artik ekip degil, danisman kendisi (web sitemizden) hesaplayip giriyor.
+  {
+    id: "vefat_teminati",
+    text: "Prim tutarına göre web sitemizden hesapladığınız vefat teminatını paylaşır mısınız?",
+    type: "text",
+    validate: primTutariGecerliMi,
+    validationError: "Bu bir tutar gibi görünmüyor, lütfen vefat teminatını rakamla birlikte tekrar yazar mısınız?"
+  },
+  {
+    id: "sigortali_cep",
+    text: "Sigortalının cep telefonu numarasını paylaşır mısınız?",
+    type: "text",
+    validate: telefonGecerliMi,
+    validationError: "Girilen cep telefonu numarası geçerli görünmüyor, lütfen tekrar yazar mısınız? (Örn: 0555 123 45 67)"
+  },
+  {
+    id: "sigortali_eposta",
+    text: "Sigortalının e-posta adresini paylaşır mısınız?",
+    type: "text",
+    validate: epostaGecerliMi,
+    validationError: "Girilen e-posta adresi geçerli görünmüyor, lütfen tekrar yazar mısınız?"
+  },
   {
     id: "odeyen_cep",
     text: "Ödeyecek kişinin cep telefonu numarasını paylaşır mısınız?",
     type: "text",
+    validate: telefonGecerliMi,
+    validationError: "Girilen cep telefonu numarası geçerli görünmüyor, lütfen tekrar yazar mısınız? (Örn: 0555 123 45 67)",
     skipIf: (a) => a.odeyen_farkli_mi !== "Hayır, Farklı Biri"
   },
   {
     id: "odeyen_eposta",
     text: "Ödeyecek kişinin e-posta adresini paylaşır mısınız?",
     type: "text",
+    validate: epostaGecerliMi,
+    validationError: "Girilen e-posta adresi geçerli görünmüyor, lütfen tekrar yazar mısınız?",
     skipIf: (a) => a.odeyen_farkli_mi !== "Hayır, Farklı Biri"
   },
+  // Garanti Emeklilik'in cagri merkezi musteriyi bu tarih/saat araliginda
+  // arayacak - mailin en ustunde bir cumle olarak ozetleniyor (bkz.
+  // satisTamamla'daki acilisMetni).
   {
-    id: "belgeler",
+    id: "arama_tarihi",
+    text: "Müşterinin hangi tarihte aranmasını istersiniz? (GG.AA.YYYY)",
+    type: "text",
+    validate: yenilemeTarihiGecerliMi,
+    validationError: "Lütfen tarihi GG.AA.YYYY formatında yazar mısınız? (Örn: 21.07.2026)"
+  },
+  {
+    id: "arama_saat_araligi",
+    text: "Hangi saat aralığında aranmasını istersiniz? (08:00-18:00 arası, Örn: 14:00-16:00)",
+    type: "text",
+    validate: saatAraligiGecerliMi,
+    validationError:
+      "Aramalar sadece 08:00-18:00 arasında yapılabiliyor, lütfen bu aralıkta bir saat aralığı yazar mısınız? (Örn: 14:00-16:00)"
+  },
+  // Son 5 soru: her biri tek bir belgenin FOTOĞRAFINI sırasıyla ister (PDF/
+  // döküman değil - kamera ya da galeriden seçilen bir fotoğraf her zaman
+  // WhatsApp'ın kendi "fotoğraf ekle" arayüzünden gönderilebiliyor). Her
+  // fotoğraf gönderildiğinde Claude görsel analiziyle hem netlik hem de
+  // doğru belge olup olmadığı kontrol ediliyor (bkz. belgeAnaliz.js).
+  {
+    id: "belge_acik_riza",
+    type: "tekli_foto_belge",
     text:
-      `Son olarak şu belgeleri gönderir misiniz:\n${REQUIRED_BELGELER_METNI}\n\n` +
-      `Hepsini gönderdikten sonra "tamam" yazmanız yeterli. 📎`,
-    type: "coklu_belge"
+      "Şimdi sırasıyla birkaç belgenin fotoğrafını rica edeceğim.\n\n" +
+      "📄 İlk olarak, imzalı *Açık Rıza Beyanı'nın (KVKK metni)* fotoğrafını gönderir misiniz? " +
+      "(Yukarıda gönderdiğim şablonu müşteriye yazdırıp imzalatabilirsiniz)",
+    beklenenBelge:
+      "İmzalı bir Açık Rıza Beyanı / KVKK aydınlatma-rıza metni. Üzerinde yazılı metin ve belgenin altında " +
+      "el yazısıyla atılmış bir imza olmalı.",
+    dosyaAdi: "acik_riza_beyani.jpg",
+    sablonGonder: true
+  },
+  {
+    id: "belge_imza_karti",
+    type: "tekli_foto_belge",
+    text: "📄 Şimdi imzalı *İletişim Bilgileri ve Islak İmza Kartı*nın fotoğrafını gönderir misiniz?",
+    beklenenBelge:
+      "İmzalı bir İletişim Bilgileri ve Islak İmza Kartı formu. Üzerinde iletişim bilgileri (ad, telefon, " +
+      "adres vb.) ve el yazısıyla atılmış bir imza olmalı.",
+    dosyaAdi: "imza_karti.jpg"
+  },
+  {
+    id: "belge_yerlesim_yeri",
+    type: "tekli_foto_belge",
+    text: "📄 Şimdi *yerleşim yeri belgesinin (ikametgah)* fotoğrafını gönderir misiniz?",
+    beklenenBelge:
+      "Bir yerleşim yeri belgesi / ikametgah belgesi. Resmi bir kurum (nüfus müdürlüğü, e-Devlet çıktısı vb.) " +
+      "tarafından düzenlenmiş, kişinin güncel adres bilgisini gösteren bir belge olmalı.",
+    dosyaAdi: "yerlesim_yeri_belgesi.jpg"
+  },
+  {
+    id: "belge_kimlik_on",
+    type: "tekli_foto_belge",
+    text: "📄 Şimdi *kimliğin ön yüzünün* fotoğrafını gönderir misiniz?",
+    beklenenBelge:
+      "Bir T.C. kimlik kartının ÖN yüzü - üzerinde fotoğraf, isim, soyisim ve T.C. kimlik numarası bulunan yüz.",
+    dosyaAdi: "kimlik_on.jpg"
+  },
+  {
+    id: "belge_kimlik_arka",
+    type: "tekli_foto_belge",
+    text: "📄 Son olarak *kimliğin arka yüzünün* fotoğrafını gönderir misiniz?",
+    beklenenBelge:
+      "Bir T.C. kimlik kartının ARKA yüzü - üzerinde seri numarası, doğum yeri/tarihi ve diğer bilgilerin " +
+      "bulunduğu yüz.",
+    dosyaAdi: "kimlik_arka.jpg"
   }
 ];
 
 // BES (Yeni İş) soru listesi, Hayat listesiyle birebir ayni - sadece "paket"
 // sorusu haric (BES'te paket ayrimi yok). Boylece iki liste hep senkron kalir.
-const SATIS_SORULARI_BES_YENI_IS = SATIS_SORULARI_HAYAT.filter((soru) => soru.id !== "paket");
+const SATIS_SORULARI_BES_YENI_IS = SATIS_SORULARI_HAYAT.filter(
+  (soru) => soru.id !== "paket" && soru.id !== "vefat_teminati"
+);
 
 // Danisman listesi tum urunlerde ayni referansi paylasir (flows.js'deki
 // DANISMANLAR sabiti), o yuzden herhangi bir urunden okuyabiliriz.
@@ -314,6 +437,24 @@ function sonrakiGecerliIndex(sorular, answers, baslangic) {
   return idx;
 }
 
+// Satis kaydi (Hayat / BES Yeni İş / ileride Aktarım) tamamlanmadan once son
+// bir guvenlik kontrolu: atlanmayan (skipIf/danismandaGizle olmayan) HER
+// sorunun gercekten cevaplanmis oldugundan emin oluyoruz. Normalde akis zaten
+// bir soruyu cevaplanmadan atlamiyor, ama bu fonksiyon; ileride Aktarım gibi
+// yeni bir soru listesi eklendiginde de otomatik olarak ayni korumayi
+// sagliyor - urun tipine gore ayri ayri kontrol yazmaya gerek kalmiyor.
+// ("tekli_foto_belge" tipi sorularin cevabi answers'da degil, ayrica
+// session.satisBelgeler'de tutuluyor - o yuzden burada kontrol edilmiyor,
+// belgeler satisTamamla'da ayrica kontrol ediliyor.)
+function eksikBilgiVarMi(sorular, answers) {
+  return sorular.some((soru) => {
+    if (soru.type === "tekli_foto_belge") return false;
+    if (soru.danismandaGizle || (soru.skipIf && soru.skipIf(answers))) return false;
+    const cevap = answers[soru.id];
+    return cevap === undefined || cevap === null || (typeof cevap === "string" && cevap.trim() === "");
+  });
+}
+
 // --- Satis kaydi akisi (Prim Iadeli Hayat Sigortasi) ---
 // "BES Hayat Satış" ilk once hangi urun oldugunu soruyor (Hayat/BES), BES
 // secilirse ayrica Yeni İş mi Aktarım mi oldugunu soruyor - Aktarım henuz
@@ -343,7 +484,7 @@ async function satisSoruSor(from, session) {
 
   // Belgeler adimina ilk gelindiginde, danismanin musteriye yazdirip
   // imzalatmasi icin Garanti'nin bos sablon formlarini once gonderiyoruz.
-  if (soru.type === "coklu_belge") {
+  if (soru.sablonGonder) {
     await sabitSablonlariGonder(from);
   }
 
@@ -358,6 +499,32 @@ async function satisSoruSor(from, session) {
 }
 
 async function satisTamamla(from, session) {
+  // Belge olmadan Garanti Emeklilik'e mail gitmesinin hicbir anlami yok -
+  // normal akista buraya sadece 5 belge de kabul edildikten sonra
+  // gelinebiliyor, ama savunmaci olarak yine de kontrol ediyoruz.
+  if (!session.satisBelgeler || session.satisBelgeler.length === 0) {
+    console.error("satisTamamla belgesiz cagirildi, mail gonderilmeden durduruldu.");
+    await sendText(
+      from,
+      "Belgeler eksik olduğu için kaydı tamamlayamadım 😕 Lütfen belgeleri tekrar göndermeyi deneyin, sorun devam ederse bana ulaşın."
+    );
+    await karsilamaGoster(from, session);
+    return;
+  }
+
+  // Eksik bilgiyle de mail gitmesin - Hayat, BES ve (ileride) Aktarım icin
+  // ayni kontrol gecerli, cunku eksikBilgiVarMi urun tipine ozel degil,
+  // dogrudan o akisin soru listesi (session.satisSorular) uzerinden calisiyor.
+  if (eksikBilgiVarMi(session.satisSorular, session.satisAnswers)) {
+    console.error("satisTamamla eksik bilgiyle cagirildi, mail gonderilmeden durduruldu.");
+    await sendText(
+      from,
+      "Bazı bilgiler eksik göründüğü için kaydı tamamlayamadım 😕 Lütfen \"menü\" yazıp baştan tekrar deneyin, sorun devam ederse bana ulaşın."
+    );
+    await karsilamaGoster(from, session);
+    return;
+  }
+
   const danisman = danismaniBul(from);
   const a = session.satisAnswers;
   const urunTipi = session.satisUrunTipi;
@@ -375,6 +542,7 @@ async function satisTamamla(from, session) {
     `Müşteri Ad Soyad: ${a.musteri_ad_soyad}`,
     `Sigortalı TCK No: ${a.sigortali_tck}`,
     `Sigortalı Doğum Tarihi: ${a.sigortali_dogum_tarihi}`,
+    `Cinsiyet: ${a.sigortali_cinsiyet}`,
     `Katılımcı Uyruk/Doğum Yeri: ${a.sigortali_uyruk} / ${a.sigortali_dogum_yeri}`,
     `Ödeyen Ad Soyad TCK No: ${odeyenAdSoyad} ${odeyenTck}`,
     `Dağıtım Kanalı Adı: EKŞİ GROUP`,
@@ -384,23 +552,47 @@ async function satisTamamla(from, session) {
     `Ödeme Aracı: ${a.odeme_araci}`,
     `Aylık Prim Tutarı: ${a.prim_tutari}`,
     `Ödeme Dönemi: ${a.odeme_donemi}`,
-    // Vefat teminati artik danismana sorulmuyor - prim tutarindan yola
-    // cikarak ekip tarafindan web sitesinden hesaplanacak, o yuzden burada
-    // sadece bir hatirlatma satiri birakiyoruz.
-    ...(urunTipi === "hayat" ? [`Vefat Teminatı: (prim tutarına göre ekip tarafından hesaplanacak)`] : []),
+    // Vefat teminatini artik danisman kendisi (web sitemizden) hesaplayip
+    // giriyor - sadece Hayat'ta soruluyor, BES'te bu alan yok.
+    ...(urunTipi === "hayat" ? [`Vefat Teminatı: ${a.vefat_teminati}`] : []),
     `Sigortalı Cep Telefonu: ${a.sigortali_cep}`,
     `Sigortalı E-Posta: ${a.sigortali_eposta}`,
     `Ödeyen Cep Telefonu: ${odeyenCep}`,
     `Ödeyen E-Posta: ${odeyenEposta}`
   ];
 
+  // Danismanin tek tek yukledigi belgeleri (kimlik on/arka, imzali evraklar,
+  // yerlesim yeri belgesi) mail'e ayri ayri ek olarak eklemek yerine tek bir
+  // PDF halinde birlestiriyoruz. Birlestirme herhangi bir sebeple basarisiz
+  // olursa (orn. bozuk bir resim dosyasi), mail'in gitmemesi yerine belgeleri
+  // ayri ayri ekleyerek gonderime devam ediyoruz - guvenli yedek.
+  let ekBelgeler = session.satisBelgeler;
+  try {
+    const birlesikPdfBuffer = await belgeleriTekPdfeBirlestir(session.satisBelgeler);
+    ekBelgeler = [
+      {
+        dosyaAdi: `${a.musteri_ad_soyad} - Belgeler.pdf`,
+        mimeType: "application/pdf",
+        veriBase64: birlesikPdfBuffer.toString("base64")
+      }
+    ];
+  } catch (err) {
+    console.error(
+      "Belgeler tek PDF halinde birlestirilemedi, ayri ayri gonderiliyor:",
+      err.message
+    );
+  }
+
+  const acilisMetni = `Müşterimizin ${a.arama_tarihi} tarihinde, ${a.arama_saat_araligi} saatleri arasında aranması ricadır.`;
+
   await garantiEmekliligeGonder({
     urunAdi: urunAdiTam,
     musteriAdi: a.musteri_ad_soyad,
     telefon: a.sigortali_cep,
     ozetSatirlari,
-    ekBelgeler: session.satisBelgeler,
-    konuFormati: "satis" // konu satirini "Urun Adi Musteri Adi" formatinda kurar
+    ekBelgeler,
+    konuFormati: "satis", // konu satirini "Urun Adi Musteri Adi" formatinda kurar
+    acilisMetni
   }).catch((err) => console.error("Garanti Emeklilik satis maili gonderilirken hata:", err.message));
 
   // Panelde de gorunmesi icin lead olarak da kaydediyoruz.
@@ -687,22 +879,64 @@ async function handleAdvisorMessage(from, parsed) {
       return;
     }
 
-    // Satis kaydi akisinda, "coklu_belge" tipi soru bekleniyorsa (kimlik,
-    // form, yerlesim yeri belgesi gibi) belgeyi biriktiriyoruz.
+    // Satis kaydi akisinda, "tekli_foto_belge" tipi soru bekleniyorsa (KVKK
+    // metni, imza karti, yerlesim yeri belgesi, kimlik on/arka yuz) belge
+    // fotografini once Claude gorsel analiziyle kontrol edip (net mi, dogru
+    // belge mi) sonra kabul ediyoruz.
     if (session.state === "DANISMAN_SATIS_SORU") {
       const soru = session.satisSorular[session.satisSoruIndex];
-      if (soru && soru.type === "coklu_belge") {
+      if (soru && soru.type === "tekli_foto_belge") {
+        if (!parsed.mimeType || !parsed.mimeType.startsWith("image/")) {
+          await sendText(from, "Bu adımda bir PDF/döküman değil, fotoğraf göndermeniz gerekiyor. Lütfen fotoğraf olarak gönderir misiniz? 📸");
+          return;
+        }
         try {
           const { buffer, mimeType } = await mediaIndir(parsed.mediaId);
+          const gercekMimeType = parsed.mimeType || mimeType;
+
+          await sendText(from, "Fotoğrafınızı inceliyorum, bir saniye... 🔍");
+          let analiz = null;
+          try {
+            analiz = await belgeFotografiAnalizEt(buffer, gercekMimeType, soru.beklenenBelge);
+          } catch (err) {
+            // Analiz basarisiz olursa (orn. ANTHROPIC_API_KEY tanimli degil ya
+            // da gecici bir API sorunu) kontrolu atlayip belgeyi normal kabul
+            // ediyoruz - gecici bir aksama satis surecini durdurmasin.
+            console.error("Belge foto analizi yapilamadi (belge yine de kabul edildi):", err.message);
+          }
+
+          if (analiz && !analiz.netMi) {
+            await sendText(
+              from,
+              `Fotoğraf yeterince net görünmüyor 😕 ${analiz.aciklama || ""}\n\nDaha iyi ışıkta, net bir şekilde tekrar çeker misiniz?`
+            );
+            return;
+          }
+          if (analiz && !analiz.dogruBelgeMi) {
+            await sendText(
+              from,
+              `Bu fotoğraf beklediğim belgeye benzemiyor 🤔 ${analiz.aciklama || ""}\n\nLütfen doğru belgenin fotoğrafını gönderir misiniz?`
+            );
+            return;
+          }
+
           session.satisBelgeler.push({
-            dosyaAdi: parsed.dosyaAdi || `belge_${session.satisBelgeler.length + 1}`,
-            mimeType: parsed.mimeType || mimeType,
+            dosyaAdi: soru.dosyaAdi,
+            mimeType: gercekMimeType,
             veriBase64: buffer.toString("base64")
           });
-          await sendText(
-            from,
-            `📎 Belge alındı (${session.satisBelgeler.length}. belge). Diğer belgeleri gönderebilir, bitirdiyseniz "tamam" yazabilirsiniz.`
+          await sendText(from, "Belge alındı ✅");
+
+          session.satisSoruIndex = sonrakiGecerliIndex(
+            session.satisSorular,
+            session.satisAnswers,
+            session.satisSoruIndex + 1
           );
+          if (session.satisSoruIndex >= session.satisSorular.length) {
+            await satisTamamla(from, session);
+          } else {
+            await satisSoruSor(from, session);
+          }
         } catch (err) {
           console.error("Satis belgesi indirilemedi:", err?.response?.data || err.message);
           await sendText(from, "Belgeyi kaydederken bir sorun oluştu, tekrar gönderir misiniz?");
@@ -1031,18 +1265,9 @@ async function handleAdvisorMessage(from, parsed) {
     case "DANISMAN_SATIS_SORU": {
       const soru = session.satisSorular[session.satisSoruIndex];
 
-      if (soru.type === "coklu_belge") {
-        const BITIRME_KELIMELERI = ["tamam", "bitti", "gonderdim", "hepsi bu", "tamamdir", "bu kadar"];
-        const bitirdiMi = BITIRME_KELIMELERI.some((k) => normalizeTr(userText || "").includes(k));
-        if (!bitirdiMi) {
-          await sendText(from, `Belge gönderebilirsiniz, bitirdiyseniz "tamam" yazmanız yeterli. 📎`);
-          return;
-        }
-        if (session.satisBelgeler.length === 0) {
-          await sendText(from, "Devam edebilmemiz için en az bir belge göndermeniz gerekiyor. 📎");
-          return;
-        }
-        await satisTamamla(from, session);
+      if (soru.type === "tekli_foto_belge") {
+        const metin = typeof soru.text === "function" ? soru.text(session.satisAnswers) : soru.text;
+        await sendText(from, `Bu adımda bir fotoğraf göndermenizi bekliyorum 📸\n\n${metin}`);
         return;
       }
 

@@ -94,6 +94,64 @@ function tarihiMsYap(value) {
   return new Date(yil, ay - 1, gun, 12, 0, 0).getTime();
 }
 
+// Bos ya da sadece bosluktan olusan bir cevap degil mi (genel amacli, serbest
+// metin alanlari icin - orn. uyruk, dogum yeri).
+function bosDegilMi(value) {
+  return !!(value || "").trim();
+}
+
+// Ad Soyad gibi alanlar icin: en az iki kelimeden olusmali (ad + soyad),
+// tek basina "asdf" ya da "-" gibi anlamsiz tek kelimelik girisleri eler.
+function adSoyadGecerliMi(value) {
+  const v = (value || "").trim();
+  if (v.length < 3) return false;
+  const kelimeler = v.split(/\s+/).filter(Boolean);
+  return kelimeler.length >= 2;
+}
+
+// Turkiye cep telefonu: basinda istege bagli +90/90/0, sonrasinda 5 ile
+// baslayan 10 haneli numara (orn. 05551234567, +905551234567, 5551234567).
+function telefonGecerliMi(value) {
+  const v = (value || "").replace(/[\s()\-]/g, "");
+  return /^(\+90|90|0)?5\d{9}$/.test(v);
+}
+
+// Basit ama pratik bir e-posta format kontrolu.
+function epostaGecerliMi(value) {
+  const v = (value || "").trim();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+}
+
+// Prim tutari gibi serbest metin girilen ama icinde mutlaka bir rakam
+// gecmesi gereken alanlar icin (orn. "USD 450,00"). Kesin bir para formati
+// zorlamiyoruz (doviz/TL, ondalik ayraci degisebiliyor), sadece bos ya da
+// tamamen rakamsiz bir giris ("yok", "-" gibi) elenir.
+function primTutariGecerliMi(value) {
+  const v = (value || "").trim();
+  return v.length > 0 && /\d/.test(v);
+}
+
+// Garanti Emeklilik cagri merkezinin musteriyi aramasi istenen saat araligi:
+// "SS:DD-SS:DD" (orn. "14:00-16:00", araya bosluk konulmasi da kabul edilir).
+// Cagri merkezi sadece 08:00-18:00 arasi calistigi icin, girilen araligin bu
+// pencerenin icinde ve baslangicin bitisten once oldugundan da emin oluyoruz.
+const ARAMA_PENCERESI_BASLANGIC_DK = 8 * 60; // 08:00
+const ARAMA_PENCERESI_BITIS_DK = 18 * 60; // 18:00
+
+function saatAraligiGecerliMi(value) {
+  const v = (value || "").trim();
+  const eslesme = v.match(/^([01]\d|2[0-3]):([0-5]\d)\s*-\s*([01]\d|2[0-3]):([0-5]\d)$/);
+  if (!eslesme) return false;
+
+  const baslangicDk = Number(eslesme[1]) * 60 + Number(eslesme[2]);
+  const bitisDk = Number(eslesme[3]) * 60 + Number(eslesme[4]);
+
+  if (baslangicDk >= bitisDk) return false;
+  if (baslangicDk < ARAMA_PENCERESI_BASLANGIC_DK || bitisDk > ARAMA_PENCERESI_BITIS_DK) return false;
+
+  return true;
+}
+
 module.exports = {
   tcKimlikGecerliMi,
   tarihGecerliMi,
@@ -103,5 +161,11 @@ module.exports = {
   plakaGecerliMi,
   ruhsatSeriNoGecerliMi,
   yenilemeTarihiGecerliMi,
-  tarihiMsYap
+  tarihiMsYap,
+  bosDegilMi,
+  adSoyadGecerliMi,
+  telefonGecerliMi,
+  epostaGecerliMi,
+  primTutariGecerliMi,
+  saatAraligiGecerliMi
 };

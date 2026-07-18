@@ -60,6 +60,27 @@ function mesajDahaOnceIslendiMi(mesajId) {
   return false;
 }
 
+// Bu liste de (leadler, oturumlar gibi) periyodik olarak veritabanina
+// yedekleniyor - boylece bir restart, "daha once gorulmus" mesaj gecmisini
+// silmiyor ve Meta'nin gecikmis tekrar denemeleri restart sonrasinda da
+// dogru sekilde taninip atlanabiliyor (bkz. webhook isleyicisindeki zaman
+// damgasi kontrolu ile birlikte iki katmanli koruma).
+async function islenenMesajIdleriYukle() {
+  const veri = await db.oku("islenenMesajIdleri");
+  if (Array.isArray(veri)) {
+    veri.forEach((id) => {
+      if (islenenMesajIdleri.has(id)) return; // guvenlik: yinelenen kayit olmasin
+      islenenMesajIdleri.add(id);
+      islenenMesajSirasi.push(id);
+    });
+    console.log(`${veri.length} islenmis mesaj ID'si veritabanindan yuklendi.`);
+  }
+}
+
+async function islenenMesajIdleriKaydet() {
+  await db.yaz("islenenMesajIdleri", islenenMesajSirasi);
+}
+
 // --- Sifre + WhatsApp OTP ile iki faktorlu giris (temsilci paneli icin) ---
 // 1. faktor: kullanici adi/sifre (tarayicinin standart Basic Auth kutusu).
 // 2. faktor: WhatsApp'a gonderilen 6 haneli tek kullanimlik kod - GIRIS YAPAN
@@ -689,7 +710,8 @@ async function tumVeriyiKaydet() {
     leadStore.kaydet().catch((err) => console.error("Talepler kaydedilemedi:", err.message)),
     messageLog.kaydet().catch((err) => console.error("Mesaj gecmisi kaydedilemedi:", err.message)),
     dokumanStore.kaydet().catch((err) => console.error("Dokumanlar kaydedilemedi:", err.message)),
-    yenilemeStore.kaydet().catch((err) => console.error("Yenilemeler kaydedilemedi:", err.message))
+    yenilemeStore.kaydet().catch((err) => console.error("Yenilemeler kaydedilemedi:", err.message)),
+    islenenMesajIdleriKaydet().catch((err) => console.error("İşlenen mesaj ID'leri kaydedilemedi:", err.message))
   ]);
 }
 
@@ -707,6 +729,7 @@ async function baslat() {
   await messageLog.yukle();
   await dokumanStore.yukle();
   await yenilemeStore.yukle();
+  await islenenMesajIdleriYukle();
 
   app.listen(PORT, () => {
     console.log(`Sunucu ${PORT} portunda calisiyor.`);

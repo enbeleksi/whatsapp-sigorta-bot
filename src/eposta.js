@@ -42,13 +42,18 @@ function transportGetir() {
 // ekBelgeler: [{ dosyaAdi, mimeType, veriBase64 }] - satis kaydinda zorunlu evraklar
 // konuFormati: "teklif" (varsayilan, "Yeni {urun} Talebi - {musteri}") ya da
 //   "satis" ("{urun} {musteri}" - Garanti'nin bekledigi tam konu formati)
+// acilisMetni: sadece "satis" formatinda kullanilir - govdenin ilk cumlesini
+//   override eder (orn. musterinin aranmasini istedigi tarih/saat araligi).
+//   Verilmezse eski sabit metne ("Müşterimizin uzaktan aranmasını rica
+//   ederiz.") geri duser.
 async function garantiEmekliligeGonder({
   urunAdi,
   musteriAdi,
   telefon,
   ozetSatirlari,
   ekBelgeler,
-  konuFormati = "teklif"
+  konuFormati = "teklif",
+  acilisMetni
 }) {
   const transport = transportGetir();
   if (!transport) {
@@ -74,7 +79,7 @@ async function garantiEmekliligeGonder({
 
   const govde =
     konuFormati === "satis"
-      ? `Merhaba,\nMüşterimizin uzaktan aranmasını rica ederiz.\n\n${ozetSatirlari.join("\n")}\n\n---\nBu mail WE Sigorta CRM tarafından otomatik olarak gönderilmiştir.`
+      ? `Merhaba,\n${acilisMetni || "Müşterimizin uzaktan aranmasını rica ederiz."}\n\n${ozetSatirlari.join("\n")}\n\n---\nBu mail WE Sigorta CRM tarafından otomatik olarak gönderilmiştir.`
       : `Yeni ${urunAdi} talebi\n\nMüşteri: ${musteriAdi}\nTelefon: ${telefon}\n\n${ozetSatirlari.join("\n")}\n\n---\nBu mail WE Sigorta CRM tarafından otomatik olarak gönderilmiştir.`;
 
   const attachments = (ekBelgeler || []).map((belge) => ({
