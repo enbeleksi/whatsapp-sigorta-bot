@@ -428,7 +428,14 @@ app.get("/api/panel/guvenlik-kodu-sablonu-olustur", panelAuth, async (req, res) 
 app.get("/api/panel/musteri-bilgilendirme-sablonu-olustur", panelAuth, async (req, res) => {
   try {
     const sonuc = await sablonOlustur({
-      name: "musteri_basvuru_bilgilendirme",
+      // NOT: Ad "_v2" ile degistirildi - eski "musteri_basvuru_bilgilendirme"
+      // reddedilmisti, silindi ama Meta'nin silme islemini tamamlamasi
+      // beklenenden uzun surdu ("Mevcut Turkish icerikler silinirken yeni
+      // Turkish icerikler eklenemez" hatasi tekrar tekrar alindi). Ayni ismi
+      // yeniden kullanmayi beklemek yerine yeni bir isimle devam ediyoruz -
+      // MUSTERI_BASVURU_TEMPLATE_NAME'i onaylandiktan sonra bu YENI isimle
+      // (asagida) Railway'de tanimlamaniz gerekiyor.
+      name: "musteri_basvuru_bilgilendirme_v2",
       language: "tr",
       category: "UTILITY",
       components: [
