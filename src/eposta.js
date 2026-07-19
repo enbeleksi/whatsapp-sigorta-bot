@@ -16,6 +16,8 @@
 //                            (orn. "bildirim@wesigorta.com.tr" - Resend'de
 //                            domain dogrulanmadan bu adresten gonderim
 //                            calismaz, bkz. resend.com/domains)
+//   EPOSTA_YANIT_ADRESI    - (istege bagli) hem Reply-To hem Cc olarak
+//                            eklenir (orn. "enbel@outlook.com.tr")
 
 const RESEND_API_URL = "https://api.resend.com/emails";
 
@@ -99,11 +101,14 @@ async function garantiEmekliligeGonder({
   // enbel@outlook.com.tr'yi "from" olarak kullanamayiz cunku o domain'in
   // DNS'ine erisimimiz yok, SPF/DKIM/DMARC dogrulamasini gecemez ve
   // spam/sahte mail olarak isaretlenir). Bunun yerine EPOSTA_YANIT_ADRESI
-  // tanimliysa "Reply-To" olarak ekleniyor - Garanti Emeklilik "Yanıtla"ya
-  // bastiginda cevap dogrudan bu adrese (orn. enbel@outlook.com.tr) gider,
-  // "from" adresine degil.
+  // tanimliysa hem "Reply-To" hem "Cc" olarak ekleniyor:
+  //   - Reply-To: Garanti Emeklilik "Yanıtla"ya bastiginda cevap dogrudan
+  //     bu adrese (orn. enbel@outlook.com.tr) gider, "from" adresine degil.
+  //   - Cc: gonderilen mailin bir kopyasi ANINDA bu kutuya da duser, boylece
+  //     her satis/teklif maili panele bakmadan da takip edilebiliyor.
   if (process.env.EPOSTA_YANIT_ADRESI) {
     govdeJson.reply_to = process.env.EPOSTA_YANIT_ADRESI;
+    govdeJson.cc = [process.env.EPOSTA_YANIT_ADRESI];
   }
 
   // "Connection timeout" gibi hatalar cogunlukla GECICI bir ag sorunudur -

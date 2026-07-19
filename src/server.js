@@ -366,6 +366,52 @@ app.get("/api/panel/guvenlik-kodu-sablonu-olustur", panelAuth, async (req, res) 
   }
 });
 
+// --- Bir kerelik kurulum: satis basariyla Garanti Emeklilik'e iletildiginde
+// MUSTERININ kendi cep telefonuna gonderilen bilgilendirme mesaji icin
+// UTILITY kategorisinde bir sablon olusturur. Musteri bu WhatsApp numarasina
+// hic yazmadigi (24 saatlik pencere kapali oldugu) icin bu mesaj SADECE
+// onceden onaylanmis bir sablonla gonderilebiliyor (bkz. advisorEngine.js
+// musteriyeSatisBildirimiGonder). Meta onayi (genelde dakikalar-birkac saat
+// surer) WhatsApp Manager > Message Templates ekranindan takip edilebilir;
+// onaylanmadan bu bildirim gonderilemez. Onaylandiktan sonra sablon adini
+// Railway'de MUSTERI_BASVURU_TEMPLATE_NAME olarak tanimlamaniz yeterli.
+// Kullanildiktan sonra bu route silinebilir.
+app.get("/api/panel/musteri-bilgilendirme-sablonu-olustur", panelAuth, async (req, res) => {
+  try {
+    const sonuc = await sablonOlustur({
+      name: "musteri_basvuru_bilgilendirme",
+      language: "tr",
+      category: "UTILITY",
+      components: [
+        {
+          type: "BODY",
+          text:
+            "Merhaba {{musteri_adi}} 👋\n\n" +
+            "*{{urun_adi}}* başvurunuz alınmıştır ✅ Geleceğiniz için attığınız bu değerli adımdan dolayı sizi tebrik ederiz.\n\n" +
+            "Başvurunuzu tamamlamak üzere Garanti Emeklilik Genel Müdürlüğü, {{arama_tarihi}} tarihinde {{arama_saat_araligi}} saatleri arasında sizi arayacaktır. Arama 444 03 36 ya da 0212 334 ile başlayan bir numaradan gelecektir, lütfen cevapsız bırakmamaya özen gösterin.\n\n" +
+            "Bizi tercih ettiğiniz için teşekkür ederiz.",
+          example: {
+            body_text_named_params: [
+              { param_name: "musteri_adi", example: "Ahmet Yılmaz" },
+              { param_name: "urun_adi", example: "Premium Prim İadeli Hayat Sigortası" },
+              { param_name: "arama_tarihi", example: "21.07.2026" },
+              { param_name: "arama_saat_araligi", example: "14:00-16:00" }
+            ]
+          }
+        }
+      ]
+    });
+    res.send(
+      `<pre style="font-family:monospace; padding:20px;">✅ Şablon isteği gönderildi.\n\n${JSON.stringify(sonuc.data, null, 2)}</pre>`
+    );
+  } catch (err) {
+    console.error("Musteri bilgilendirme sablonu olusturma hatasi:", err?.response?.data || err.message);
+    res.status(500).send(
+      `<pre style="font-family:monospace; padding:20px; color:#c00;">❌ Hata:\n\n${JSON.stringify(err?.response?.data || err.message, null, 2)}</pre>`
+    );
+  }
+});
+
 app.get("/panel", panelAuth, (req, res) => {
   res.sendFile(path.join(__dirname, "panel.html"));
 });

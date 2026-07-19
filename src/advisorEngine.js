@@ -9,7 +9,7 @@
 const fs = require("fs");
 const path = require("path");
 const { getSession } = require("./sessionStore");
-const { sendText, sendButtons, sendList, sendDocument, mediaIndir } = require("./loggedWhatsapp");
+const { sendText, sendButtons, sendList, sendDocument, sendTemplate, mediaIndir } = require("./loggedWhatsapp");
 const leadStore = require("./leadStore");
 const yenilemeStore = require("./yenilemeStore");
 const dokumanStore = require("./dokumanStore");
@@ -26,6 +26,7 @@ const {
   bosDegilMi,
   adSoyadGecerliMi,
   telefonGecerliMi,
+  telefonUluslararasiFormata,
   epostaGecerliMi,
   primTutariGecerliMi,
   saatAraligiGecerliMi,
@@ -576,6 +577,49 @@ async function satisSoruSor(from, session) {
   }
 }
 
+// Satis basariyla Garanti Emeklilik'e iletildikten sonra, MUSTERININ kendi
+// cep telefonuna dogrudan WhatsApp'tan bir bilgilendirme mesaji gonderir -
+// hem BES hem Hayat satislarinda gecerli (satisTamamla ikisi tarafindan da
+// paylasiliyor). Musteri bu WhatsApp numarasina hic yazmamis oluyor (bu
+// numarayla konusan danismandir, musteri degil) - bu yuzden mesaj normal
+// sendText ile ATILAMAZ: Meta, 24 saatlik musteri hizmeti penceresi disinda
+// (isletme tarafindan baslatilan) mesajlarin SADECE onceden onaylanmis bir
+// SABLON (template) ile gonderilmesine izin veriyor. Bu yuzden
+// MUSTERI_BASVURU_TEMPLATE_NAME ortam degiskeninde, Meta tarafindan
+// onaylanmis bir sablon adi bekleniyor - tanimli degilse (henuz sablon
+// olusturulmadi/onaylanmadiysa) bu bildirim sessizce atlanir, satis akisi
+// bundan etkilenmez.
+async function musteriyeSatisBildirimiGonder(a, urunAdiTam) {
+  const sablonAdi = process.env.MUSTERI_BASVURU_TEMPLATE_NAME;
+  if (!sablonAdi) {
+    console.warn(
+      "MUSTERI_BASVURU_TEMPLATE_NAME tanimli degil - musteriye satis bilgilendirme mesaji gonderilemedi."
+    );
+    return;
+  }
+  if (!a.sigortali_cep) return;
+
+  const numara = telefonUluslararasiFormata(a.sigortali_cep);
+  const parametreler = {
+    musteri_adi: a.musteri_ad_soyad,
+    urun_adi: urunAdiTam,
+    arama_tarihi: a.arama_tarihi,
+    arama_saat_araligi: a.arama_saat_araligi
+  };
+  const gosterilecekMetin =
+    `[Otomatik - Satış Bilgilendirme] ${a.musteri_ad_soyad} için ${urunAdiTam} başvurusu alındı, ` +
+    `Garanti Emeklilik ${a.arama_tarihi} tarihinde ${a.arama_saat_araligi} saatleri arasında arayacak bilgisi iletildi.`;
+
+  try {
+    await sendTemplate(numara, sablonAdi, "tr", parametreler, gosterilecekMetin);
+  } catch (err) {
+    console.error(
+      `Müşteriye satış bilgilendirme mesajı gönderilemedi (${a.musteri_ad_soyad} - ${numara}):`,
+      err?.response?.data || err.message
+    );
+  }
+}
+
 async function satisTamamla(from, session) {
   // Belge olmadan Garanti Emeklilik'e mail gitmesinin hicbir anlami yok -
   // normal akista buraya sadece 5 belge de kabul edildikten sonra
@@ -705,6 +749,11 @@ async function satisTamamla(from, session) {
       from,
       `Satış kaydı tamamlandı ✅ ${a.musteri_ad_soyad} için ${urunAdiTam} kaydı Garanti Emeklilik'e iletildi.`
     );
+    // Mail basariyla gittiyse (yani Garanti Emeklilik musteriyi gercekten
+    // arayacaksa) musteriye de bilgilendirme mesaji atalim - mail gitmediyse
+    // (asagidaki else) bu bildirimi ATLIYORUZ, cunku arama fiilen
+    // planlanmamis olabilir ve musteriye yanlis bir beklenti vermek istemeyiz.
+    await musteriyeSatisBildirimiGonder(a, urunAdiTam);
   } else {
     console.error(
       `Satis kaydi tamamlandi ama Garanti Emeklilik maili GONDERILEMEDI (${a.musteri_ad_soyad} - ${urunAdiTam}): ${mailSonucu ? mailSonucu.sebep : "bilinmeyen hata"}`

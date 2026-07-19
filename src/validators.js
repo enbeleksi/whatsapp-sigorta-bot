@@ -122,6 +122,20 @@ function epostaGecerliMi(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
 }
 
+// WhatsApp Cloud API'ye mesaj gonderirken numaranin basinda ulke kodu
+// OLMAK ZORUNDA (orn. 905551234567) - danismanlarin girdigi yerel formatlari
+// ("0555 123 45 67", "5551234567" vb.) bu sekle ceviriyoruz. Musteriye satis
+// sonrasi bilgilendirme mesaji gonderirken kullanilir (bkz. advisorEngine.js
+// satisTamamla / musteriyeSatisBildirimiGonder).
+function telefonUluslararasiFormata(value) {
+  const v = (value || "").replace(/[\s()\-]/g, "");
+  if (/^\+90\d{10}$/.test(v)) return v.slice(1);
+  if (/^90\d{10}$/.test(v)) return v;
+  if (/^0\d{10}$/.test(v)) return `90${v.slice(1)}`;
+  if (/^5\d{9}$/.test(v)) return `90${v}`;
+  return v; // beklenmedik bir format - oldugu gibi denenir
+}
+
 // Prim tutari gibi serbest metin girilen ama icinde mutlaka bir rakam
 // gecmesi gereken alanlar icin (orn. "USD 450,00"). Kesin bir para formati
 // zorlamiyoruz (doviz/TL, ondalik ayraci degisebiliyor), sadece bos ya da
@@ -254,6 +268,7 @@ module.exports = {
   bosDegilMi,
   adSoyadGecerliMi,
   telefonGecerliMi,
+  telefonUluslararasiFormata,
   epostaGecerliMi,
   primTutariGecerliMi,
   saatAraligiGecerliMi,
