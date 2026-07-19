@@ -428,21 +428,25 @@ app.get("/api/panel/guvenlik-kodu-sablonu-olustur", panelAuth, async (req, res) 
 app.get("/api/panel/musteri-bilgilendirme-sablonu-olustur", panelAuth, async (req, res) => {
   try {
     const sonuc = await sablonOlustur({
-      // NOT: Ad "_v3" - "_v2" INVALID_FORMAT sebebiyle reddedildi (Meta'nin
-      // sablonDetayGetir sorgusundan ogrendik - bkz. /api/panel/sablon-detay).
-      // Sebep muhtemelen iki degiskenin birbirine COK yakin, aralarinda
-      // anlamli kelime olmadan yerlestirilmis olmasiydi ("{{musteri_adi}},
-      // {{urun_adi}}" - sadece bir virgulle ayrilmislardi, "{{arama_tarihi}}
-      // tarihinde {{arama_saat_araligi}}" de sadece tek kelimeyle). Meta'nin
-      // format kurallari, her degiskenin oncesinde/sonrasinda gercek, anlamli
-      // metin olmasini ve degiskenlerin govdenin en basinda/sonunda
-      // olmamasini sart kosuyor. Asagidaki metin her degisken cifti arasina
-      // yeterince aciklayici kelime eklenerek yeniden yazildi - ayrica
+      // NOT: Ad "_v4" - "_v2" VE "_v3" ikisi de INVALID_FORMAT sebebiyle
+      // reddedildi (Meta'nin sablonDetayGetir sorgusundan ogrendik - bkz.
+      // /api/panel/sablon-detay). v3'te degisken araligini genisletmek
+      // (aralarina anlamli kelime eklemek) sorunu COZMEDI - asil sebep
+      // baska: Meta'nin API'sinde ISIMLI ({{musteri_adi}} gibi) degiskenler
+      // icin, sablonun EN UST seviyesinde (name/language/category ile ayni
+      // hizada, BODY component'inin ICINDE DEGIL) ayrica
+      // "parameter_format": "NAMED" alani gonderilmesi GEREKIYORMUS. Biz bunu
+      // hic göndermemistik - bu alan olmadan Meta varsayilan olarak
+      // POSITIONAL ({{1}}, {{2}}) format bekliyor, govdedeki isimli
+      // degiskenlerle celisiyor, ve bu celiski INVALID_FORMAT olarak
+      // donuyor. Asagida artik "parameter_format": "NAMED" eklendi - asil
+      // duzeltme bu, metin (v3'teki genisletilmis hali) aynen korundu.
       // MUSTERI_BASVURU_TEMPLATE_NAME'i onaylandiktan sonra bu YENI isimle
       // Railway'de tanimlamaniz gerekiyor.
-      name: "musteri_basvuru_bilgilendirme_v3",
+      name: "musteri_basvuru_bilgilendirme_v4",
       language: "tr",
       category: "UTILITY",
+      parameter_format: "NAMED",
       components: [
         {
           type: "BODY",
