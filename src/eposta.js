@@ -2,55 +2,27 @@
 // mail olarak yonlendirir - onlar bu talepleri kendi is akislarina ekleyip
 // cagri merkezlerinden musteriyi ariyorlar.
 //
-// Outlook/Microsoft 365 SMTP uzerinden gonderilir. Hesap bilgileri Railway
-// ortam degiskenlerinden okunur (OUTLOOK_EMAIL, OUTLOOK_APP_SIFRE) - koda
-// asla yazilmaz. NOT: Microsoft, bu tarz sifre-tabanli SMTP erisimini 2026
-// sonunda kaldiracagini duyurdu - o tarihe yaklasinca alternatif bir
-// yonteme (OAuth ya da farkli bir eposta servisi) gecmemiz gerekebilir.
+// Resend (resend.com) HTTPS API'si uzerinden gonderilir. ESKIDEN Outlook/
+// Microsoft 365 SMTP kullaniliyordu ama Railway'den smtp.office365.com:587'e
+// baglanti surekli "Connection timeout" ile basarisiz oluyordu (Railway'in
+// disa giden SMTP portlarini engellemesi gibi gorunuyor - retry'a ragmen
+// hep ayni hata alindi). HTTPS (443) uzerinden calisan Resend'e gecerek bu
+// sorunu tamamen ortadan kaldiriyoruz - HTTPS hemen hicbir barinma
+// sirketinde engellenmez.
 //
-// "Connection timeout" HATASI ALINIRSA: bu, kimlik bilgilerinin (email/sifre)
-// yanlis oldugu anlamina GELMEZ - Railway'in Outlook'un SMTP sunucusuna
-// (smtp.office365.com:587) hic baglanti KURAMADIGI anlamina gelir. Asagida
-// 1 kez otomatik tekrar deneniyor (gecici bir ag aksamasiysa bu genelde
-// yeterli oluyor). Tekrar denemeden sonra da surekli ayni hata aliniyorsa,
-// en olasi sebep barinma sirketinin (Railway) disa giden SMTP portlarini
-// (25/587) spam onleme amacli engellemis olmasidir - bircok PaaS platformunda
-// yaygin bir kisitlamadir. O durumda kalici cozum ham SMTP yerine HTTPS
-// uzerinden calisan bir eposta servisine (Microsoft Graph API, SendGrid,
-// Resend vb.) gecmek olur - HTTPS (443) portu neredeyse hicbir yerde
-// engellenmez.
+// Hesap bilgileri Railway ortam degiskenlerinden okunur, koda asla yazilmaz:
+//   RESEND_API_KEY         - resend.com hesabindaki API anahtari
+//   EPOSTA_GONDEREN_ADRESI - dogrulanmis domain uzerinden gonderilecek adres
+//                            (orn. "bildirim@wesigorta.com.tr" - Resend'de
+//                            domain dogrulanmadan bu adresten gonderim
+//                            calismaz, bkz. resend.com/domains)
 
-const nodemailer = require("nodemailer");
+const RESEND_API_URL = "https://api.resend.com/emails";
 
 const GARANTI_EMEKLILIK_ALICILARI = [
   "gbeacentelerkoordinasyon@garantibbvaemeklilik.com.tr",
   "gbeacenteler@garantibbvaemeklilik.com.tr"
 ];
-
-let transportOnbellek = null;
-
-function transportGetir() {
-  const email = process.env.OUTLOOK_EMAIL;
-  const sifre = process.env.OUTLOOK_APP_SIFRE;
-  if (!email || !sifre) return null;
-
-  if (!transportOnbellek) {
-    transportOnbellek = nodemailer.createTransport({
-      host: "smtp.office365.com",
-      port: 587,
-      secure: false, // STARTTLS (port 587)
-      auth: { user: email, pass: sifre },
-      // Nodemailer'in varsayilan baglanti zaman asimi degerleri cok uzun
-      // (bazen dakikalarca "asili" kalip sonra "Connection timeout" hatasi
-      // veriyor) - bunlari kisa ve acik tutuyoruz ki gecici bir aglantisi
-      // sorununda hizlica hata alip asagidaki retry mekanizmasi devreye girsin.
-      connectionTimeout: 15000, // TCP baglantisi kurulamazsa 15sn'de vazgec
-      greetingTimeout: 15000, // sunucudan "merhaba" cevabi gelmezse 15sn'de vazgec
-      socketTimeout: 20000 // gonderim sirasinda soket 20sn sessiz kalirsa vazgec
-    });
-  }
-  return transportOnbellek;
-}
 
 // Bir milisaniye kadar bekler (retry'lar arasinda kisa bir ara vermek icin).
 function bekle(ms) {
@@ -79,12 +51,13 @@ async function garantiEmekliligeGonder({
   konuFormati = "teklif",
   acilisMetni
 }) {
-  const transport = transportGetir();
-  if (!transport) {
+  const apiKey = process.env.RESEND_API_KEY;
+  const gonderenAdresi = process.env.EPOSTA_GONDEREN_ADRESI;
+  if (!apiKey || !gonderenAdresi) {
     console.warn(
-      "OUTLOOK_EMAIL / OUTLOOK_APP_SIFRE tanimli degil - Garanti Emeklilik maili gonderilemedi."
+      "RESEND_API_KEY / EPOSTA_GONDEREN_ADRESI tanimli degil - Garanti Emeklilik maili gonderilemedi."
     );
-    return { basarili: false, sebep: "OUTLOOK_EMAIL / OUTLOOK_APP_SIFRE tanımlı değil" };
+    return { basarili: false, sebep: "RESEND_API_KEY / EPOSTA_GONDEREN_ADRESI tanımlı değil" };
   }
 
   // TEST MODU: EPOSTA_TEST_ADRESI ortam degiskeni tanimliysa, mail Garanti
@@ -106,29 +79,55 @@ async function garantiEmekliligeGonder({
       ? `Merhaba,\n${acilisMetni || "Müşterimizin uzaktan aranmasını rica ederiz."}\n\n${ozetSatirlari.join("\n")}\n\n---\nBu mail WE Sigorta CRM tarafından otomatik olarak gönderilmiştir.`
       : `Yeni ${urunAdi} talebi\n\nMüşteri: ${musteriAdi}\nTelefon: ${telefon}\n\n${ozetSatirlari.join("\n")}\n\n---\nBu mail WE Sigorta CRM tarafından otomatik olarak gönderilmiştir.`;
 
+  // Resend, eklerin icerigini base64 STRING olarak bekliyor (Buffer degil) -
+  // bizim veriBase64 zaten base64 string oldugu icin dogrudan gonderebiliyoruz.
   const attachments = (ekBelgeler || []).map((belge) => ({
     filename: belge.dosyaAdi,
-    content: Buffer.from(belge.veriBase64, "base64"),
-    contentType: belge.mimeType
+    content: belge.veriBase64
   }));
 
-  // "Connection timeout" gibi hatalar cogunlukla GECICI bir ag sorunudur
-  // (Railway <-> Outlook SMTP arasinda tek seferlik bir aksama) - bu yuzden
-  // ilk deneme basarisiz olursa kisa bir bekleme sonrasi 1 kez daha deneniyor.
-  // Ikinci deneme de basarisiz olursa artik gercekten bir sorun var demektir
-  // (orn. barinma sirketinin SMTP portlarini engellemesi ya da kimlik bilgisi
-  // hatasi) ve bu durum danismana/loglara oldugu gibi bildiriliyor.
+  const govdeJson = {
+    from: `WE Sigorta <${gonderenAdresi}>`,
+    to: aliciListesi,
+    subject: konu,
+    text: govde,
+    attachments
+  };
+
+  // Garanti Emeklilik bazen bu maile CEVAP yaziyor - "from" adresi Resend'de
+  // dogrulanmis domain uzerinden gitmek ZORUNDA (wesigorta.com.tr gibi,
+  // enbel@outlook.com.tr'yi "from" olarak kullanamayiz cunku o domain'in
+  // DNS'ine erisimimiz yok, SPF/DKIM/DMARC dogrulamasini gecemez ve
+  // spam/sahte mail olarak isaretlenir). Bunun yerine EPOSTA_YANIT_ADRESI
+  // tanimliysa "Reply-To" olarak ekleniyor - Garanti Emeklilik "Yanıtla"ya
+  // bastiginda cevap dogrudan bu adrese (orn. enbel@outlook.com.tr) gider,
+  // "from" adresine degil.
+  if (process.env.EPOSTA_YANIT_ADRESI) {
+    govdeJson.reply_to = process.env.EPOSTA_YANIT_ADRESI;
+  }
+
+  // "Connection timeout" gibi hatalar cogunlukla GECICI bir ag sorunudur -
+  // bu yuzden ilk deneme basarisiz olursa kisa bir bekleme sonrasi 1 kez
+  // daha deneniyor. Ikinci deneme de basarisiz olursa danismana/loglara
+  // durum oldugu gibi bildiriliyor (bkz. advisorEngine.js satisTamamla).
   const MAKS_DENEME = 2;
   let sonHata = null;
   for (let deneme = 1; deneme <= MAKS_DENEME; deneme++) {
     try {
-      await transport.sendMail({
-        from: `"WE Sigorta" <${process.env.OUTLOOK_EMAIL}>`,
-        to: aliciListesi.join(", "),
-        subject: konu,
-        text: govde,
-        attachments
+      const response = await fetch(RESEND_API_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(govdeJson)
       });
+
+      if (!response.ok) {
+        const hataMetni = await response.text().catch(() => "");
+        throw new Error(`Resend API hatasi (HTTP ${response.status}): ${hataMetni}`);
+      }
+
       console.log(
         `Garanti Emeklilik maili gonderildi (${testAdresi ? "TEST MODU: " + testAdresi : "GERCEK ALICILAR"}, ${attachments.length} ek, ${deneme}. denemede): ${urunAdi} - ${musteriAdi}`
       );
