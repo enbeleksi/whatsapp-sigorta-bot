@@ -17,6 +17,13 @@ const sessionStore = require("./sessionStore");
 const { getSession } = sessionStore;
 
 const app = express();
+// Railway (Render, Heroku vb. gibi) trafigi bir proxy/load balancer arkasindan
+// yonlendiriyor - bu ayar olmadan req.ip her zaman proxy'nin kendi IP'sini
+// gosterir, gercek istemci IP'sini degil (X-Forwarded-For header'indan okumak
+// icin Express'e "bu proxy'e guven" dememiz gerekiyor). Ozellikle
+// /panel/dogrula'ya kimin/nereden istek attigini teshis ederken (bkz. asagida)
+// bu ayar olmadan loglar ise yaramaz.
+app.set("trust proxy", true);
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: false })); // /panel/dogrula form gonderimi icin
 
@@ -117,6 +124,19 @@ const PANEL_KULLANICILARI = [
   }
 ];
 
+// GUVENLIK KODU (2FA/OTP) GECICI OLARAK ASKIYA ALINDI (19.07.2026) - hem
+// Bahadır'a hem Enbel'e, GERCEK bir giris denemesi olmadan pespese WhatsApp
+// guvenlik kodu gitmeye basladi, kok neden henuz netlesmedi (supheli
+// adaylar: onaylanmis bildirim sablonlarindan birine eskiden eklenmis,
+// icinde sifre gecen bir link'in WhatsApp tarafindan otomatik "link
+// onizleme" olarak sunucu tarafinda ziyaret edilmesi vb.). Sorun netlesip
+// duzeltilene kadar butun 2FA akisi TAMAMEN devre disi - panel SADECE
+// sifre (Basic Auth) ile aciliyor, hicbir WhatsApp kodu gonderilmiyor.
+// PANEL_2FA_AKTIF ortam degiskeni "true" olarak ayarlanip yeniden deploy
+// edilirse eski (sifre + WhatsApp kodu) akisi hemen geri doner - alttaki
+// kodun hicbiri silinmedi, sadece bu bayrakla by-pass ediliyor.
+const PANEL_2FA_AKTIF = process.env.PANEL_2FA_AKTIF === "true";
+
 const OTP_GECERLILIK_MS = 5 * 60 * 1000; // 5 dakika
 const OTURUM_GECERLILIK_MS = 12 * 60 * 60 * 1000; // 12 saat
 
@@ -195,6 +215,13 @@ function panelAuth(req, res, next) {
   }
   req.panelKullanici = kullanici;
 
+  // 2FA askiya alinmisken (bkz. PANEL_2FA_AKTIF yukarida) sifre yeterli -
+  // /panel/dogrula'ya hic ugramadan devam ediyoruz, boylece hicbir WhatsApp
+  // kodu tetiklenmiyor.
+  if (!PANEL_2FA_AKTIF) {
+    return next();
+  }
+
   const oturumToken = cookieOku(req, "panel_oturum");
   const oturum = oturumToken && dogrulanmisOturumlar.get(oturumToken);
   // Oturumun, GIRIS YAPMAYA CALISAN kullaniciya ait oldugundan da emin oluyoruz
@@ -222,6 +249,28 @@ const sonDenemeler = new Map(); // kullaniciAdi -> { token, deneme, gonderimZama
 
 app.get("/panel/dogrula", sadeceSifreGerekli, async (req, res) => {
   const kullanici = req.panelKullanici;
+  // TANI AMACLI LOG: Bahadır'a sebepsiz yere tekrar tekrar 2FA kodu gitmesi
+  // sikayeti uzerine eklendi - hangi IP/tarayicinin bu sayfayi COOLDOWN'dan
+  // BAGIMSIZ olarak (yani WhatsApp mesaji atilmasa bile) ne siklikta ziyaret
+  // ettigini gormek icin. Asagidaki asil OTP gonderim logu sadece GERCEKTEN
+  // yeni bir kod uretildiginde yaziliyor - bu log ise HER istekte yaziliyor,
+  // boylece "arka planda sessizce tekrar tekrar istek atan bir sekme/bot var
+  // mi" sorusuna Railway loglarindan cevap bulabiliriz. Sorun teshis edildikten
+  // sonra bu log satiri kaldirilabilir.
+  console.log(
+    `/panel/dogrula istek: kullanici=${kullanici.kullaniciAdi} ip=${req.ip} ua="${req.get("User-Agent") || ""}"`
+  );
+
+  // KILL-SWITCH: 2FA askidayken (PANEL_2FA_AKTIF != "true"), bu sayfaya NASIL
+  // ulasilirsa ulasilsin (panelAuth yönlendirmesi, dogrudan link, eski bir
+  // bookmark, otomatik bir link-onizleme ziyareti vb.) KOD URETIP
+  // GONDERMEDEN dogrudan panele yönlendiriyoruz. Yukaridaki tani logu yine de
+  // yazilir - boylece bu sayfaya kimin/ne siklikta ulastigini gormeye devam
+  // ederiz, ama artik hicbir WhatsApp mesaji tetiklenmez.
+  if (!PANEL_2FA_AKTIF) {
+    return res.redirect(302, "/panel");
+  }
+
   let denemeToken = cookieOku(req, "panel_deneme");
   let deneme = denemeToken && otpDenemeleri.get(denemeToken);
   const buTarayicidaGecerliDenemeVar =
