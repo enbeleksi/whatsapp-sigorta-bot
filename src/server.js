@@ -428,33 +428,39 @@ app.get("/api/panel/guvenlik-kodu-sablonu-olustur", panelAuth, async (req, res) 
 app.get("/api/panel/musteri-bilgilendirme-sablonu-olustur", panelAuth, async (req, res) => {
   try {
     const sonuc = await sablonOlustur({
-      // NOT: Ad "_v2" ile degistirildi - eski "musteri_basvuru_bilgilendirme"
-      // reddedilmisti, silindi ama Meta'nin silme islemini tamamlamasi
-      // beklenenden uzun surdu ("Mevcut Turkish icerikler silinirken yeni
-      // Turkish icerikler eklenemez" hatasi tekrar tekrar alindi). Ayni ismi
-      // yeniden kullanmayi beklemek yerine yeni bir isimle devam ediyoruz -
+      // NOT: Ad "_v3" - "_v2" INVALID_FORMAT sebebiyle reddedildi (Meta'nin
+      // sablonDetayGetir sorgusundan ogrendik - bkz. /api/panel/sablon-detay).
+      // Sebep muhtemelen iki degiskenin birbirine COK yakin, aralarinda
+      // anlamli kelime olmadan yerlestirilmis olmasiydi ("{{musteri_adi}},
+      // {{urun_adi}}" - sadece bir virgulle ayrilmislardi, "{{arama_tarihi}}
+      // tarihinde {{arama_saat_araligi}}" de sadece tek kelimeyle). Meta'nin
+      // format kurallari, her degiskenin oncesinde/sonrasinda gercek, anlamli
+      // metin olmasini ve degiskenlerin govdenin en basinda/sonunda
+      // olmamasini sart kosuyor. Asagidaki metin her degisken cifti arasina
+      // yeterince aciklayici kelime eklenerek yeniden yazildi - ayrica
       // MUSTERI_BASVURU_TEMPLATE_NAME'i onaylandiktan sonra bu YENI isimle
-      // (asagida) Railway'de tanimlamaniz gerekiyor.
-      name: "musteri_basvuru_bilgilendirme_v2",
+      // Railway'de tanimlamaniz gerekiyor.
+      name: "musteri_basvuru_bilgilendirme_v3",
       language: "tr",
       category: "UTILITY",
       components: [
         {
           type: "BODY",
-          // NOT: Meta ilk denemede bu sablonu REJECTED olarak donduruyordu -
-          // sebebi, UTILITY kategorisinde gonderilen icerigin PROMOSYON/
-          // pazarlama diliyle (orn. "tebrik ederiz", "bizi tercih ettiginiz
-          // icin tesekkur ederiz") karismis olmasiydi. Meta, UTILITY
+          // NOT: Meta ilk denemede (v1) bu sablonu REJECTED olarak
+          // donduruyordu - sebebi, UTILITY kategorisinde gonderilen icerigin
+          // PROMOSYON/pazarlama diliyle (orn. "tebrik ederiz", "bizi tercih
+          // ettiginiz icin tesekkur ederiz") karismis olmasiydi. Meta, UTILITY
           // sablonlarinin SADECE islemsel/durum bildirimi olmasini, hicbir
           // ovucu/tesekkur/pazarlama cumlesi icermemesini sart kosuyor -
           // aksi halde ya reddediliyor ya da MARKETING kategorisine
           // yonlendiriliyor (ki bu da musteri onayi/opt-in gerektirir ve
-          // cok daha zor onaylanir). Bu yuzden metin sadece basvurunun
-          // alindigini ve aranma bilgisini bildiren, tamamen notr/islemsel
-          // bir dile cekildi.
+          // cok daha zor onaylanir). v2'de bu dil zaten sadelestirilmisti ama
+          // INVALID_FORMAT ile reddedildi (yukaridaki not) - bu surumde hem
+          // notr dil korunuyor hem de degisken araligi genisletildi.
           text:
-            "Merhaba {{musteri_adi}}, {{urun_adi}} başvurunuz alınmıştır. " +
-            "Garanti Emeklilik Genel Müdürlüğü, {{arama_tarihi}} tarihinde {{arama_saat_araligi}} saatleri arasında sizi arayacaktır. " +
+            "Merhaba {{musteri_adi}}, size önemli bir bilgilendirme yapıyoruz. " +
+            "{{urun_adi}} başvurunuz alınmıştır. Garanti Emeklilik Genel Müdürlüğü sizi arayacaktır. " +
+            "Planlanan arama tarihi {{arama_tarihi}}, planlanan saat aralığı ise {{arama_saat_araligi}} olarak belirlenmiştir. " +
             "Arama 444 03 36 ya da 0212 334 ile başlayan bir numaradan gelecektir.",
           example: {
             body_text_named_params: [
