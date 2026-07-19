@@ -144,6 +144,37 @@ async function sendTemplate(to, templateName, languageCode, parametreler) {
   );
 }
 
+// sendTemplate'in POZISYONEL ({{1}}, {{2}}, ...) degiskenli sablonlar icin
+// versiyonu. musteri_basvuru_bilgilendirme sablonunu ISIMLI ({{musteri_adi}}
+// gibi) degiskenlerle olusturmaya 3 kez calisildi (v2, v3, v4) - ucunde de
+// Meta INVALID_FORMAT ile reddetti; en son "parameter_format": "NAMED"
+// alanini da ekledigimiz halde sorun devam etti. Isimli degisken formati bu
+// hesapta/API surumunde (v20.0) guvenilir calismiyor gibi gorunuyor - bu
+// yuzden bu sablon icin POZISYONEL formata donuldu (tum Graph API
+// surumlerinde sorunsuz calisan, en eski/en stabil format). degerler,
+// {{1}}, {{2}}, {{3}}... sirasiyla ESLESECEK SEKILDE bir DIZI olmalidir.
+async function sendTemplatePozisyonel(to, templateName, languageCode, degerler) {
+  return axios.post(
+    apiUrl(),
+    {
+      messaging_product: "whatsapp",
+      to,
+      type: "template",
+      template: {
+        name: templateName,
+        language: { code: languageCode },
+        components: [
+          {
+            type: "body",
+            parameters: degerler.map((deger) => ({ type: "text", text: deger }))
+          }
+        ]
+      }
+    },
+    { headers: headers() }
+  );
+}
+
 // Authentication kategorisindeki (Kopyala Kod butonlu) sablonlar icin ozel
 // gonderim fonksiyonu - normal sendTemplate'ten farkli olarak kod, hem govde
 // {{1}} degiskeninde hem de butonun "coupon_code" parametresinde AYNI ANDA
@@ -236,6 +267,7 @@ module.exports = {
   mediaYukle,
   sendDocument,
   sendTemplate,
+  sendTemplatePozisyonel,
   sendAuthTemplate,
   mediaIndir,
   sablonOlustur,

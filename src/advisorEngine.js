@@ -9,7 +9,7 @@
 const fs = require("fs");
 const path = require("path");
 const { getSession } = require("./sessionStore");
-const { sendText, sendButtons, sendList, sendDocument, sendTemplate, mediaIndir } = require("./loggedWhatsapp");
+const { sendText, sendButtons, sendList, sendDocument, sendTemplatePozisyonel, mediaIndir } = require("./loggedWhatsapp");
 const leadStore = require("./leadStore");
 const yenilemeStore = require("./yenilemeStore");
 const dokumanStore = require("./dokumanStore");
@@ -600,18 +600,19 @@ async function musteriyeSatisBildirimiGonder(a, urunAdiTam) {
   if (!a.sigortali_cep) return;
 
   const numara = telefonUluslararasiFormata(a.sigortali_cep);
-  const parametreler = {
-    musteri_adi: a.musteri_ad_soyad,
-    urun_adi: urunAdiTam,
-    arama_tarihi: a.arama_tarihi,
-    arama_saat_araligi: a.arama_saat_araligi
-  };
+  // Sablon POZISYONEL ({{1}}, {{2}}, {{3}}, {{4}}) degiskenlerle olusturuldu
+  // (bkz. server.js musteri-bilgilendirme-sablonu-olustur route'undaki NOT -
+  // isimli degisken formati Meta tarafindan pespese INVALID_FORMAT ile
+  // reddedildi). Bu yuzden burada da SIRALI bir dizi gonderiyoruz - sira
+  // sablondaki {{1}}..{{4}} ile BIREBIR ayni olmak zorunda: musteri_adi,
+  // urun_adi, arama_tarihi, arama_saat_araligi.
+  const degerler = [a.musteri_ad_soyad, urunAdiTam, a.arama_tarihi, a.arama_saat_araligi];
   const gosterilecekMetin =
     `[Otomatik - Satış Bilgilendirme] ${a.musteri_ad_soyad} için ${urunAdiTam} başvurusu alındı, ` +
     `Garanti Emeklilik ${a.arama_tarihi} tarihinde ${a.arama_saat_araligi} saatleri arasında arayacak bilgisi iletildi.`;
 
   try {
-    await sendTemplate(numara, sablonAdi, "tr", parametreler, gosterilecekMetin);
+    await sendTemplatePozisyonel(numara, sablonAdi, "tr", degerler, gosterilecekMetin);
   } catch (err) {
     console.error(
       `Müşteriye satış bilgilendirme mesajı gönderilemedi (${a.musteri_ad_soyad} - ${numara}):`,

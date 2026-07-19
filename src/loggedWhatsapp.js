@@ -73,6 +73,19 @@ async function sendTemplate(to, templateName, languageCode, parameters, gosteril
   }
 }
 
+// sendTemplate'in POZISYONEL ({{1}}, {{2}}, ...) degiskenli sablonlar icin
+// versiyonu - bkz. whatsapp.js'teki sendTemplatePozisyonel yorumu.
+async function sendTemplatePozisyonel(to, templateName, languageCode, degerler, gosterilecekMetin) {
+  try {
+    const result = await whatsapp.sendTemplatePozisyonel(to, templateName, languageCode, degerler);
+    messageLog.logMessage(to, "out", gosterilecekMetin);
+    return result;
+  } catch (err) {
+    messageLog.logMessage(to, "out", `⚠️ (GONDERILEMEDI) ${gosterilecekMetin}`);
+    throw err;
+  }
+}
+
 // Authentication kategorisindeki (Kopyala Kod butonlu) sablonlar icin.
 async function sendAuthTemplate(to, templateName, languageCode, kod, gosterilecekMetin) {
   try {
@@ -91,6 +104,7 @@ module.exports = {
   sendList,
   sendDocument,
   sendTemplate,
+  sendTemplatePozisyonel,
   sendAuthTemplate,
   mediaIndir: whatsapp.mediaIndir
 };

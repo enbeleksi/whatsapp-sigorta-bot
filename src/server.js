@@ -428,25 +428,23 @@ app.get("/api/panel/guvenlik-kodu-sablonu-olustur", panelAuth, async (req, res) 
 app.get("/api/panel/musteri-bilgilendirme-sablonu-olustur", panelAuth, async (req, res) => {
   try {
     const sonuc = await sablonOlustur({
-      // NOT: Ad "_v4" - "_v2" VE "_v3" ikisi de INVALID_FORMAT sebebiyle
+      // NOT: Ad "_v5" - "_v2", "_v3" VE "_v4" ucu de INVALID_FORMAT sebebiyle
       // reddedildi (Meta'nin sablonDetayGetir sorgusundan ogrendik - bkz.
-      // /api/panel/sablon-detay). v3'te degisken araligini genisletmek
-      // (aralarina anlamli kelime eklemek) sorunu COZMEDI - asil sebep
-      // baska: Meta'nin API'sinde ISIMLI ({{musteri_adi}} gibi) degiskenler
-      // icin, sablonun EN UST seviyesinde (name/language/category ile ayni
-      // hizada, BODY component'inin ICINDE DEGIL) ayrica
-      // "parameter_format": "NAMED" alani gonderilmesi GEREKIYORMUS. Biz bunu
-      // hic göndermemistik - bu alan olmadan Meta varsayilan olarak
-      // POSITIONAL ({{1}}, {{2}}) format bekliyor, govdedeki isimli
-      // degiskenlerle celisiyor, ve bu celiski INVALID_FORMAT olarak
-      // donuyor. Asagida artik "parameter_format": "NAMED" eklendi - asil
-      // duzeltme bu, metin (v3'teki genisletilmis hali) aynen korundu.
-      // MUSTERI_BASVURU_TEMPLATE_NAME'i onaylandiktan sonra bu YENI isimle
-      // Railway'de tanimlamaniz gerekiyor.
-      name: "musteri_basvuru_bilgilendirme_v4",
+      // /api/panel/sablon-detay). Sirasiyla denenenler: v3'te degisken
+      // araligini genisletmek, v4'te ustelik ust seviyeye
+      // "parameter_format": "NAMED" eklemek - hicbiri sorunu cozmedi. Isimli
+      // ({{musteri_adi}} gibi) degisken formati bu hesapta/API surumunde
+      // (v20.0) guvenilir sonuc vermiyor. Bu yuzden POZISYONEL ({{1}}, {{2}},
+      // {{3}}, {{4}}) formata donuldu - Graph API'nin en eski/en yaygin
+      // desteklenen, hicbir ozel alan gerektirmeyen sekli. Gonderim tarafi da
+      // (advisorEngine.js musteriyeSatisBildirimiGonder) buna gore
+      // sendTemplatePozisyonel kullanacak sekilde guncellendi - SIRA onemli:
+      // {{1}}=musteri_adi, {{2}}=urun_adi, {{3}}=arama_tarihi,
+      // {{4}}=arama_saat_araligi. MUSTERI_BASVURU_TEMPLATE_NAME'i
+      // onaylandiktan sonra bu YENI isimle Railway'de tanimlamaniz gerekiyor.
+      name: "musteri_basvuru_bilgilendirme_v5",
       language: "tr",
       category: "UTILITY",
-      parameter_format: "NAMED",
       components: [
         {
           type: "BODY",
@@ -458,21 +456,15 @@ app.get("/api/panel/musteri-bilgilendirme-sablonu-olustur", panelAuth, async (re
           // ovucu/tesekkur/pazarlama cumlesi icermemesini sart kosuyor -
           // aksi halde ya reddediliyor ya da MARKETING kategorisine
           // yonlendiriliyor (ki bu da musteri onayi/opt-in gerektirir ve
-          // cok daha zor onaylanir). v2'de bu dil zaten sadelestirilmisti ama
-          // INVALID_FORMAT ile reddedildi (yukaridaki not) - bu surumde hem
-          // notr dil korunuyor hem de degisken araligi genisletildi.
+          // cok daha zor onaylanir). Bu notr dil burada da korunuyor,
+          // degisiklik SADECE degisken formati (isimli -> pozisyonel).
           text:
-            "Merhaba {{musteri_adi}}, size önemli bir bilgilendirme yapıyoruz. " +
-            "{{urun_adi}} başvurunuz alınmıştır. Garanti Emeklilik Genel Müdürlüğü sizi arayacaktır. " +
-            "Planlanan arama tarihi {{arama_tarihi}}, planlanan saat aralığı ise {{arama_saat_araligi}} olarak belirlenmiştir. " +
+            "Merhaba {{1}}, size önemli bir bilgilendirme yapıyoruz. " +
+            "{{2}} başvurunuz alınmıştır. Garanti Emeklilik Genel Müdürlüğü sizi arayacaktır. " +
+            "Planlanan arama tarihi {{3}}, planlanan saat aralığı ise {{4}} olarak belirlenmiştir. " +
             "Arama 444 03 36 ya da 0212 334 ile başlayan bir numaradan gelecektir.",
           example: {
-            body_text_named_params: [
-              { param_name: "musteri_adi", example: "Ahmet Yılmaz" },
-              { param_name: "urun_adi", example: "Premium Prim İadeli Hayat Sigortası" },
-              { param_name: "arama_tarihi", example: "21.07.2026" },
-              { param_name: "arama_saat_araligi", example: "14:00-16:00" }
-            ]
+            body_text: [["Ahmet Yılmaz", "Premium Prim İadeli Hayat Sigortası", "21.07.2026", "14:00-16:00"]]
           }
         }
       ]
