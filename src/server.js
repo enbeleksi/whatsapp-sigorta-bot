@@ -385,11 +385,21 @@ app.get("/api/panel/musteri-bilgilendirme-sablonu-olustur", panelAuth, async (re
       components: [
         {
           type: "BODY",
+          // NOT: Meta ilk denemede bu sablonu REJECTED olarak donduruyordu -
+          // sebebi, UTILITY kategorisinde gonderilen icerigin PROMOSYON/
+          // pazarlama diliyle (orn. "tebrik ederiz", "bizi tercih ettiginiz
+          // icin tesekkur ederiz") karismis olmasiydi. Meta, UTILITY
+          // sablonlarinin SADECE islemsel/durum bildirimi olmasini, hicbir
+          // ovucu/tesekkur/pazarlama cumlesi icermemesini sart kosuyor -
+          // aksi halde ya reddediliyor ya da MARKETING kategorisine
+          // yonlendiriliyor (ki bu da musteri onayi/opt-in gerektirir ve
+          // cok daha zor onaylanir). Bu yuzden metin sadece basvurunun
+          // alindigini ve aranma bilgisini bildiren, tamamen notr/islemsel
+          // bir dile cekildi.
           text:
-            "Merhaba {{musteri_adi}} 👋\n\n" +
-            "*{{urun_adi}}* başvurunuz alınmıştır ✅ Geleceğiniz için attığınız bu değerli adımdan dolayı sizi tebrik ederiz.\n\n" +
-            "Başvurunuzu tamamlamak üzere Garanti Emeklilik Genel Müdürlüğü, {{arama_tarihi}} tarihinde {{arama_saat_araligi}} saatleri arasında sizi arayacaktır. Arama 444 03 36 ya da 0212 334 ile başlayan bir numaradan gelecektir, lütfen cevapsız bırakmamaya özen gösterin.\n\n" +
-            "Bizi tercih ettiğiniz için teşekkür ederiz.",
+            "Merhaba {{musteri_adi}}, {{urun_adi}} başvurunuz alınmıştır. " +
+            "Garanti Emeklilik Genel Müdürlüğü, {{arama_tarihi}} tarihinde {{arama_saat_araligi}} saatleri arasında sizi arayacaktır. " +
+            "Arama 444 03 36 ya da 0212 334 ile başlayan bir numaradan gelecektir.",
           example: {
             body_text_named_params: [
               { param_name: "musteri_adi", example: "Ahmet Yılmaz" },
