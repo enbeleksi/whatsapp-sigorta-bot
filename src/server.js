@@ -6,7 +6,7 @@ const multer = require("multer");
 const { handleIncoming, hatirlatmaGonder, sablonParametresiIcinTemizle } = require("./conversationEngine");
 const advisorEngine = require("./advisorEngine");
 const { sendText, sendDocument, sendTemplate, sendAuthTemplate } = require("./loggedWhatsapp");
-const { sablonOlustur } = require("./whatsapp");
+const { sablonOlustur, sablonDetayGetir } = require("./whatsapp");
 const messageLog = require("./messageLog");
 const leadStore = require("./leadStore");
 const yenilemeStore = require("./yenilemeStore");
@@ -472,6 +472,26 @@ app.get("/api/panel/musteri-bilgilendirme-sablonu-olustur", panelAuth, async (re
     );
   } catch (err) {
     console.error("Musteri bilgilendirme sablonu olusturma hatasi:", err?.response?.data || err.message);
+    res.status(500).send(
+      `<pre style="font-family:monospace; padding:20px; color:#c00;">❌ Hata:\n\n${JSON.stringify(err?.response?.data || err.message, null, 2)}</pre>`
+    );
+  }
+});
+
+// --- Tani amacli: bir sablonun (id ile) TAM reddedilme sebebini gosterir -
+// sablon olusturma cevabi sadece "REJECTED" durumunu dondurdugu icin (asil
+// sebebi degil), reddedilen bir sablonun ID'sini buraya verip (orn.
+// /api/panel/sablon-detay/1355838796633579) rejected_reason ve
+// correct_category alanlarini gorebiliyoruz - boylece tahmin yurutmeden
+// dogru duzeltmeyi yapabiliyoruz. Kullanildiktan sonra bu route silinebilir.
+app.get("/api/panel/sablon-detay/:id", panelAuth, async (req, res) => {
+  try {
+    const sonuc = await sablonDetayGetir(req.params.id);
+    res.send(
+      `<pre style="font-family:monospace; padding:20px;">${JSON.stringify(sonuc.data, null, 2)}</pre>`
+    );
+  } catch (err) {
+    console.error("Sablon detayi alinamadi:", err?.response?.data || err.message);
     res.status(500).send(
       `<pre style="font-family:monospace; padding:20px; color:#c00;">❌ Hata:\n\n${JSON.stringify(err?.response?.data || err.message, null, 2)}</pre>`
     );

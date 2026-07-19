@@ -216,6 +216,19 @@ async function sablonOlustur(sablonVerisi) {
   );
 }
 
+// Bir sablonun (id ile) REDDEDILME SEBEBINI ogrenmek icin kullanilir - sablon
+// olusturma cevabi sadece "REJECTED" durumunu dondurur, asil sebebi
+// (rejected_reason: PROMOTIONAL, TAG_CONTENT_MISMATCH, INVALID_FORMAT vb.) ve
+// Meta'nin onerdigi dogru kategoriyi (correct_category) gormek icin ayrica bu
+// sorguyu atmak gerekiyor - boylece tahmin yurutmek yerine kesin sebebi
+// ogrenip ona gore duzeltebiliyoruz.
+async function sablonDetayGetir(templateId) {
+  return axios.get(`https://graph.facebook.com/${API_VERSION}/${templateId}`, {
+    headers: headers(),
+    params: { fields: "id,name,status,category,rejected_reason,correct_category" }
+  });
+}
+
 module.exports = {
   sendText,
   sendButtons,
@@ -225,5 +238,6 @@ module.exports = {
   sendTemplate,
   sendAuthTemplate,
   mediaIndir,
-  sablonOlustur
+  sablonOlustur,
+  sablonDetayGetir
 };
