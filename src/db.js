@@ -61,13 +61,40 @@ async function oku(anahtar) {
   return rows.length ? rows[0].veri : null;
 }
 
+// KRITIK: server.js her YEDEKLEME_SIKLIGI_MS'de (15 saniyede) bir, sessions/
+// leads/messages/dokumanlar/yenilemeler icin BU FONKSIYONU KOSULSUZ cagirir -
+// veri gercekten degismis olsun ya da olmasin. "leads" ve "dokumanlar"
+// tablolari, tamamlanan her satisin belgelerini (kimlik/imza/saglik beyani
+// fotograflari + birlestirilmis PDF) BASE64 olarak KALICI OLARAK icinde
+// tasiyor - satis sayisi arttikca bu JSONB blob'u MB'larca buyuyebiliyor.
+// Degismemis olsa bile bu koca blob'u her 15 saniyede bir OLDUGU GIBI
+// yeniden yazmak (INSERT ... ON CONFLICT DO UPDATE, yani her seferinde YENI
+// bir satir versiyonu + tam WAL kaydi) devasa, tamamen gereksiz bir WAL
+// (write-ahead log) trafigi yaratiyordu - tam olarak bu yuzden Railway'deki
+// kucuk Postgres volume'u ("No space left on device" / WAL PANIC, bkz.
+// 20.07.2026 log kaydi) dolup cokme dongusune girdi.
+// Cozum: her anahtar icin EN SON basariyla yazilan veriyi (JSON string
+// olarak) bellekte tutuyoruz - gelen veri bununla BIREBIR AYNIYSA veritabanina
+// hic dokunmuyoruz. Boylece sadece GERCEKTEN degisen veri (yeni bir mesaj,
+// yeni bir satis, yeni bir belge vb.) diske yaziliyor - periyodik "yoklama"
+// artik bos yere WAL uretmiyor.
+const sonYazilanJson = new Map(); // anahtar -> en son basariyla yazilan veri (JSON string)
+
 async function yaz(anahtar, veri) {
   if (!pool) return;
+  const veriJson = JSON.stringify(veri);
+  if (sonYazilanJson.get(anahtar) === veriJson) {
+    return; // veri son basarili yazimdan beri degismedi - gereksiz WAL uretmeyelim
+  }
   await pool.query(
     `INSERT INTO app_state (anahtar, veri, guncellenme_zamani) VALUES ($1, $2, now())
      ON CONFLICT (anahtar) DO UPDATE SET veri = $2, guncellenme_zamani = now()`,
-    [anahtar, JSON.stringify(veri)]
+    [anahtar, veriJson]
   );
+  // Cache'i SADECE basarili yazimdan SONRA guncelliyoruz - query() hata
+  // firlatirsa (orn. baglanti kopmussa) cache eskisi gibi kalir, boylece bir
+  // sonraki denemede bu degisiklik ATLANMAZ, tekrar yazilmaya calisilir.
+  sonYazilanJson.set(anahtar, veriJson);
 }
 
 module.exports = { pool, init, oku, yaz };
