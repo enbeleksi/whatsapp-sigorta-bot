@@ -17,6 +17,27 @@ const pool = process.env.DATABASE_URL
     })
   : null;
 
+// KRITIK: pg kutuphanesinin bilinen bir tuzagi - havuzdaki BOSTA (idle) bir
+// baglanti arka planda (herhangi bir sorgu calismiyorken) kesilirse/hata
+// alirsa, Pool nesnesi bunu bir "error" event'i olarak yayinlar. Bu event'i
+// dinleyen KIMSE yoksa, Node.js bunu yakalanmamis bir hata sayip TUM
+// SURECI cokertiyor - aktif bir sorgumuz olmasa, try/catch'imiz olsa bile
+// (cunku o an calisan bir await/query yok, hata bir query'nin disinda
+// olusuyor). Railway'de PostgreSQL kisa sureli yeniden baslatildiginda ya
+// da ag hipi yasandiginda tam olarak bu sekilde tum uygulama beklenmedik
+// bir sekilde cokup yeniden baslatiliyordu (bkz. 20.07.2026 log kaydi).
+// Burada bos bir "error" dinleyicisi eklemek, Node'un bu davranisini
+// devre disi birakip hatayi sadece loglayarak sunucunun ayakta kalmasini
+// sagliyor.
+if (pool) {
+  pool.on("error", (err) => {
+    console.error(
+      "PostgreSQL havuzunda beklenmeyen bir baglanti hatasi olustu (yakalandi, sunucu CALISMAYA devam ediyor):",
+      err.message
+    );
+  });
+}
+
 async function init() {
   if (!pool) {
     console.warn(

@@ -908,12 +908,33 @@ async function baslat() {
   } catch (err) {
     console.error("Veritabani baslatilamadi, kalicilik olmadan bellek-ici calisilacak:", err.message);
   }
-  await sessionStore.yukle();
-  await leadStore.yukle();
-  await messageLog.yukle();
-  await dokumanStore.yukle();
-  await yenilemeStore.yukle();
-  await islenenMesajIdleriYukle();
+
+  // ASAGIDAKI yukle() cagrilari da (db.init() gibi) TEK TEK yakalanmali -
+  // db.init() basarisiz oldugunda (ya da baglanti tam bu satirlar
+  // calisirken kesildiginde) bunlar da AYNI hatayi (orn. ECONNREFUSED)
+  // firlatiyor. Eskiden bu cagrilar CIPLAK (try/catch'siz) await
+  // ediliyordu - yakalanmayan bir "rejection" TUM SURECI cokertiyor (Node,
+  // yakalanmamis promise red'lerinde varsayilan olarak sureci
+  // sonlandiriyor). Yani DB gecici olarak erisilemez oldugunda uygulama
+  // "kalicilik olmadan bellek-ici calisilacak" YERINE sonsuz bir
+  // crash-restart dongusune giriyordu - yukaridaki yorumun ve db.init()
+  // catch'inin vaat ettigi davranisin tam tersi (bkz. 20.07.2026 log
+  // kaydi). guvenliYukle bu bes cagriyi de birbirinden bagimsiz olarak
+  // sarmaliyor, boylece biri basarisiz olsa bile digerleri denenmeye
+  // devam ediyor ve sunucu her durumda ayaga kalkiyor.
+  async function guvenliYukle(isim, fn) {
+    try {
+      await fn();
+    } catch (err) {
+      console.error(`${isim} veritabanindan yuklenemedi, bos/bellek-ici baslanacak:`, err.message);
+    }
+  }
+  await guvenliYukle("Oturumlar", sessionStore.yukle);
+  await guvenliYukle("Talepler", leadStore.yukle);
+  await guvenliYukle("Mesaj gecmisi", messageLog.yukle);
+  await guvenliYukle("Dokumanlar", dokumanStore.yukle);
+  await guvenliYukle("Yenilemeler", yenilemeStore.yukle);
+  await guvenliYukle("Islenmis mesaj ID'leri", islenenMesajIdleriYukle);
 
   app.listen(PORT, () => {
     console.log(`Sunucu ${PORT} portunda calisiyor.`);

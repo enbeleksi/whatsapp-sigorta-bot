@@ -8,7 +8,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { getSession } = require("./sessionStore");
+const { getSession, resetSession } = require("./sessionStore");
 const { sendText, sendButtons, sendList, sendDocument, sendTemplatePozisyonel, mediaIndir } = require("./loggedWhatsapp");
 const leadStore = require("./leadStore");
 const yenilemeStore = require("./yenilemeStore");
@@ -260,10 +260,46 @@ function aramaSaatAraligiSecenekleri(answers) {
   return uygunlar.length > 0 ? uygunlar : SAAT_ARALIKLARI;
 }
 
+// Bir soru metnini, akisi kimin baslattigina gore (danisman mi, yoksa
+// musteri kendi kendine mi) iki farkli sekilde ifade etmek icin kucuk bir
+// yardimci - Turkce'de 3. sahis ("sigortalının X'i") ile 2. sahis ("X'iniz")
+// arasindaki fark sadece bir sozcuk degistirmekle olmuyor, cumle yapisi
+// degisiyor, o yuzden genel bir "cevirici" yerine her soru kendi iki
+// varyantini acikca yaziyor.
+function hitapEt(a, ucuncuSahisMetni, ikinciSahisMetni) {
+  return a && a._musteriKendiKendine ? ikinciSahisMetni : ucuncuSahisMetni;
+}
+
+// Musteriye "daha once bir danismanla gorustunuz mu" diye sorarken gosterilen
+// tam liste - flows.js'teki TUM_DANISMAN_ISIMLERI ile AYNI (numarasi olsun
+// olmasin tum danismanlar) - musteri kiminle gorustugunu soyleyebilsin diye.
+// Iki ayri dosyada tutulmasinin sebebi dairesel require sorunundan kacinmak
+// (bkz. musteriSatisBaslat yorumu) - bu liste nadiren degistigi icin
+// senkron tutmak risk degil.
+const SATIS_TUM_DANISMAN_ISIMLERI = ["Enbel", "Seda", "Bahadır", "Fırat", "Yasemin", "Furkan", "Simge", "Tuğçe"];
+
 const SATIS_SORULARI_HAYAT = [
+  // Sadece musteri KENDI KENDINE bu akisi baslattiginda sorulur (danisman
+  // bir satis kaydi olustururken bu iki soru anlamsiz, o zaten kendisi bir
+  // danisman) - bkz. flows.js'teki ayni amacli DANISMAN_SORULARI, ayni
+  // mantik burada musteri-kendi-kendine satis akisi icin tekrarlaniyor.
+  {
+    id: "satis_danisman_gorustu_mu",
+    text: "Daha önce acentemiz bünyesindeki danışmanlarımızdan biriyle görüşme fırsatınız oldu mu?",
+    type: "choice",
+    options: ["Evet", "Hayır"],
+    skipIf: (a) => !a._musteriKendiKendine
+  },
+  {
+    id: "satis_danisman_adi",
+    text: "Hangi danışmanımızla görüşme fırsatınız oldu?",
+    type: "choice",
+    options: SATIS_TUM_DANISMAN_ISIMLERI,
+    skipIf: (a) => !a._musteriKendiKendine || a.satis_danisman_gorustu_mu !== "Evet"
+  },
   {
     id: "paket",
-    text: "Hangi paket için satış kaydı oluşturuyorsunuz?",
+    text: (a) => hitapEt(a, "Hangi paket için satış kaydı oluşturuyorsunuz?", "Hangi paket ile devam etmek istersiniz?"),
     type: "choice",
     // "Standart"/"Premium" oldugu gibi mail'e gidiyor (urunAdiTam icinde,
     // "Ürün Adı: Standart Prim İadeli Hayat Sigortası" gibi) - o yuzden bu
@@ -274,7 +310,7 @@ const SATIS_SORULARI_HAYAT = [
   },
   {
     id: "musteri_ad_soyad",
-    text: (a) => `${sigortaliUnvani(a, true)}nın adını ve soyadını paylaşır mısınız?`,
+    text: (a) => hitapEt(a, `${sigortaliUnvani(a, true)}nın adını ve soyadını paylaşır mısınız?`, "Adınızı ve soyadınızı paylaşır mısınız?"),
     type: "text",
     validate: adSoyadGecerliMi,
     validationError: "Lütfen adı ve soyadı birlikte yazar mısınız? (Örn: Ahmet Yılmaz)"
@@ -285,13 +321,13 @@ const SATIS_SORULARI_HAYAT = [
   // yerine Mavi Kart numarasi isteniyor (bkz. asagidaki 3 soru).
   {
     id: "sigortali_tc_vatandasi_mi",
-    text: (a) => `${sigortaliUnvani(a, true)} Türkiye Cumhuriyeti vatandaşı mı?`,
+    text: (a) => hitapEt(a, `${sigortaliUnvani(a, true)} Türkiye Cumhuriyeti vatandaşı mı?`, "Türkiye Cumhuriyeti vatandaşı mısınız?"),
     type: "choice",
     options: ["Evet", "Hayır"]
   },
   {
     id: "sigortali_tck",
-    text: (a) => `${sigortaliUnvani(a, true)}nın T.C. kimlik numarasını paylaşır mısınız?`,
+    text: (a) => hitapEt(a, `${sigortaliUnvani(a, true)}nın T.C. kimlik numarasını paylaşır mısınız?`, "T.C. kimlik numaranızı paylaşır mısınız?"),
     type: "text",
     validate: tcKimlikGecerliMi,
     validationError: "Girilen T.C. kimlik numarası geçerli görünmüyor, lütfen 11 haneli olarak tekrar yazar mısınız?",
@@ -299,7 +335,7 @@ const SATIS_SORULARI_HAYAT = [
   },
   {
     id: "sigortali_mavi_kart_no",
-    text: (a) => `${sigortaliUnvani(a, true)}nın Mavi Kart numarasını paylaşır mısınız?`,
+    text: (a) => hitapEt(a, `${sigortaliUnvani(a, true)}nın Mavi Kart numarasını paylaşır mısınız?`, "Mavi Kart numaranızı paylaşır mısınız?"),
     type: "text",
     validate: bosDegilMi,
     validationError: "Bu alanı boş bırakamayız, lütfen Mavi Kart numarasını paylaşır mısınız?",
@@ -307,7 +343,12 @@ const SATIS_SORULARI_HAYAT = [
   },
   {
     id: "sigortali_dogum_tarihi",
-    text: (a) => `${sigortaliUnvani(a, true)}nın doğum tarihini paylaşır mısınız? (Örn: 04.08.1997 ya da 4.8.97)`,
+    text: (a) =>
+      hitapEt(
+        a,
+        `${sigortaliUnvani(a, true)}nın doğum tarihini paylaşır mısınız? (Örn: 04.08.1997 ya da 4.8.97)`,
+        "Doğum tarihinizi paylaşır mısınız? (Örn: 04.08.1997 ya da 4.8.97)"
+      ),
     type: "text",
     validate: tarihGecerliMi,
     normalize: tarihiNormallestir,
@@ -315,13 +356,18 @@ const SATIS_SORULARI_HAYAT = [
   },
   {
     id: "sigortali_cinsiyet",
-    text: (a) => `${sigortaliUnvani(a, true)}nın cinsiyeti nedir?`,
+    text: (a) => hitapEt(a, `${sigortaliUnvani(a, true)}nın cinsiyeti nedir?`, "Cinsiyetiniz nedir?"),
     type: "choice",
     options: ["Kadın", "Erkek"]
   },
   {
     id: "sigortali_uyruk",
-    text: (a) => `T.C. vatandaşı olmadığını belirttiniz, ${sigortaliUnvani(a, false)}nın uyruğunu paylaşır mısınız? (Örn: Alman)`,
+    text: (a) =>
+      hitapEt(
+        a,
+        `T.C. vatandaşı olmadığını belirttiniz, ${sigortaliUnvani(a, false)}nın uyruğunu paylaşır mısınız? (Örn: Alman)`,
+        "T.C. vatandaşı olmadığınızı belirttiniz, uyruğunuzu paylaşır mısınız? (Örn: Alman)"
+      ),
     type: "text",
     validate: bosDegilMi,
     validationError: "Bu alanı boş bırakamayız, lütfen uyruğu paylaşır mısınız?",
@@ -329,15 +375,17 @@ const SATIS_SORULARI_HAYAT = [
   },
   {
     id: "sigortali_dogum_yeri",
-    text: (a) => `${sigortaliUnvani(a, true)}nın doğum yerini paylaşır mısınız? (Örn: Adana)`,
+    text: (a) => hitapEt(a, `${sigortaliUnvani(a, true)}nın doğum yerini paylaşır mısınız? (Örn: Adana)`, "Doğum yerinizi paylaşır mısınız? (Örn: Adana)"),
     type: "text",
     validate: bosDegilMi,
     validationError: "Bu alanı boş bırakamayız, lütfen doğum yerini paylaşır mısınız?"
   },
   {
     id: "odeyen_farkli_mi",
-    text: (a) =>
-      `${a._urunTipi === "bes_yeni_is" ? "Katkı payını" : "Primi"} ödeyecek kişi ${sigortaliUnvani(a, false)}nın kendisi mi?`,
+    text: (a) => {
+      const alan = a._urunTipi === "bes_yeni_is" ? "Katkı payını" : "Primi";
+      return hitapEt(a, `${alan} ödeyecek kişi ${sigortaliUnvani(a, false)}nın kendisi mi?`, `${alan} ödeyecek kişi siz misiniz?`);
+    },
     type: "choice",
     options: ["Evet, Kendisi", "Hayır, Farklı Biri"]
   },
@@ -384,10 +432,21 @@ const SATIS_SORULARI_HAYAT = [
     id: "prim_tutari",
     // BES'te "hesaplayici" diye bir arac yok (o sadece Hayat'ta vefat teminati
     // hesaplamak icin kullaniliyor) - BES'te dogru terim "katki payi tutari".
-    text: (a) =>
-      a._urunTipi === "bes_yeni_is"
-        ? `Katılımcının ödeyeceği ${a.odeme_donemi || ""} katkı payı tutarını paylaşır mısınız? (Örn: TL 5.000,00)`
-        : `Hesaplayıcıdan bulduğunuz ${a.odeme_donemi || ""} prim tutarını paylaşır mısınız? (Örn: USD 450,00)`,
+    text: (a) => {
+      const donem = a.odeme_donemi || "";
+      if (a._urunTipi === "bes_yeni_is") {
+        return hitapEt(
+          a,
+          `Katılımcının ödeyeceği ${donem} katkı payı tutarını paylaşır mısınız? (Örn: TL 5.000,00)`,
+          `Ödemek istediğiniz ${donem} katkı payı tutarını paylaşır mısınız? (Örn: TL 5.000,00)`
+        );
+      }
+      return hitapEt(
+        a,
+        `Hesaplayıcıdan bulduğunuz ${donem} prim tutarını paylaşır mısınız? (Örn: USD 450,00)`,
+        `Web sitemizdeki hesaplayıcıdan bulduğunuz ${donem} prim tutarını paylaşır mısınız? (Örn: USD 450,00)`
+      );
+    },
     type: "text",
     // Asgari tutarin altinda bir deger girilirse KABUL ETMIYORUZ (Hayat
     // Standart 150 USD, Premium 300 USD; BES 5.000 TL) - bkz. yukarida
@@ -407,14 +466,14 @@ const SATIS_SORULARI_HAYAT = [
   },
   {
     id: "sigortali_cep",
-    text: (a) => `${sigortaliUnvani(a, true)}nın cep telefonu numarasını paylaşır mısınız?`,
+    text: (a) => hitapEt(a, `${sigortaliUnvani(a, true)}nın cep telefonu numarasını paylaşır mısınız?`, "Cep telefonu numaranızı paylaşır mısınız?"),
     type: "text",
     validate: telefonGecerliMi,
     validationError: "Girilen cep telefonu numarası geçerli görünmüyor, lütfen tekrar yazar mısınız? (Örn: 0555 123 45 67)"
   },
   {
     id: "sigortali_eposta",
-    text: (a) => `${sigortaliUnvani(a, true)}nın e-posta adresini paylaşır mısınız?`,
+    text: (a) => hitapEt(a, `${sigortaliUnvani(a, true)}nın e-posta adresini paylaşır mısınız?`, "E-posta adresinizi paylaşır mısınız?"),
     type: "text",
     validate: epostaGecerliMi,
     validationError: "Girilen e-posta adresi geçerli görünmüyor, lütfen tekrar yazar mısınız?"
@@ -442,14 +501,14 @@ const SATIS_SORULARI_HAYAT = [
   // aramaTarihiSecenekleri / aramaSaatAraligiSecenekleri).
   {
     id: "arama_tarihi",
-    text: (a) => `${sigortaliUnvani(a, true)}nın hangi tarihte aranmasını istersiniz?`,
+    text: (a) => hitapEt(a, `${sigortaliUnvani(a, true)}nın hangi tarihte aranmasını istersiniz?`, "Hangi tarihte aranmak istersiniz?"),
     type: "choice",
     options: aramaTarihiSecenekleri,
     kisaSecenekler: aramaTarihiKisaSecenekleri
   },
   {
     id: "arama_saat_araligi",
-    text: "Hangi saat aralığında aranmasını istersiniz?",
+    text: (a) => hitapEt(a, "Hangi saat aralığında aranmasını istersiniz?", "Hangi saat aralığında aranmak istersiniz?"),
     type: "choice",
     options: aramaSaatAraligiSecenekleri
   },
@@ -464,7 +523,11 @@ const SATIS_SORULARI_HAYAT = [
     text: (a) =>
       "Şimdi sırasıyla birkaç belgenin fotoğrafını rica edeceğim.\n\n" +
       "📄 İlk olarak, imzalı *Açık Rıza Beyanı'nın (KVKK metni)* fotoğrafını gönderir misiniz? " +
-      `(Yukarıda gönderdiğim şablonu ${sigortaliUnvani(a, false)}ya yazdırıp imzalatabilirsiniz)`,
+      hitapEt(
+        a,
+        `(Yukarıda gönderdiğim şablonu ${sigortaliUnvani(a, false)}ya yazdırıp imzalatabilirsiniz)`,
+        "(Yukarıda gönderdiğim şablonu yazdırıp imzalayabilirsiniz)"
+      ),
     beklenenBelge:
       "İmzalı bir Açık Rıza Beyanı / KVKK aydınlatma-rıza metni. Üzerinde yazılı metin ve belgenin altında " +
       "el yazısıyla atılmış bir imza olmalı.",
@@ -811,7 +874,7 @@ async function satisBaslat(from, session) {
   await sendButtons(from, "Hangi ürün için satış kaydı oluşturuyorsunuz?", SATIS_URUN_SECENEKLERI);
 }
 
-function satisAkisiBaslat(from, session, urunTipi, sorular) {
+function satisAkisiBaslat(from, session, urunTipi, sorular, musteriKendiKendineMi) {
   session.satisUrunTipi = urunTipi; // "hayat" | "bes_yeni_is"
   session.satisSorular = sorular;
   // _urunTipi, cevaplar nesnesinin icine de yaziliyor (normal bir soru
@@ -819,11 +882,37 @@ function satisAkisiBaslat(from, session, urunTipi, sorular) {
   // fonksiyonlari (sadece answers parametresi alan) urun tipine gore dogru
   // metni ("sigortalı" ya da "katılımcı" vb.) uretebiliyor. eksikBilgiVarMi
   // ve ozetSatirlari bu alani soru id'siyle eslesmedigi icin yoksayar.
-  session.satisAnswers = { _urunTipi: urunTipi };
+  // _musteriKendiKendine ayni mantikla - musterinin KENDISININ, bir danisman
+  // araya girmeden, kendi satis talebini olusturdugu akis icin true olur
+  // (bkz. musteriSatisBaslat) - soru metinleri buna gore 2. sahsa ("sizin",
+  // "paylaşır mısınız?") donusuyor, tamamlanma mesaji ve bildirim akisi da
+  // farklilasiyor (bkz. satisTamamla).
+  session.satisAnswers = { _urunTipi: urunTipi, _musteriKendiKendine: !!musteriKendiKendineMi };
   session.satisBelgeler = [];
   session.satisSoruIndex = sonrakiGecerliIndex(sorular, session.satisAnswers, 0);
-  session.state = "DANISMAN_SATIS_SORU";
+  session.state = musteriKendiKendineMi ? "MUSTERI_SATIS_SORU" : "DANISMAN_SATIS_SORU";
   return satisSoruSor(from, session);
+}
+
+// Musterinin (danisman araya girmeden) kendi satis talebini baslatmasi icin
+// disariya (conversationEngine.js -> startProductFlow) acilan giris noktasi.
+// urunTipi: "hayat" | "bes_yeni_is".
+async function musteriSatisBaslat(from, session, urunTipi) {
+  const sorular = urunTipi === "bes_yeni_is" ? SATIS_SORULARI_BES_YENI_IS : SATIS_SORULARI_HAYAT;
+  await satisAkisiBaslat(from, session, urunTipi, sorular, true);
+}
+
+// Musteri satis talebi akisinin ortasindayken "menü"/"iptal"/"merhaba" gibi
+// bir sey yazarsa (bkz. handleAdvisorMessage'daki global kisayol) - danisman
+// panelindeki ana menuyu ASLA gostermiyoruz (o panel musteriyi ilgilendirmez),
+// bunun yerine talebi iptal edip musteriyi normal musteri akisina (conversationEngine)
+// geri birakiyoruz.
+async function musteriSatisIptalEt(from, session) {
+  resetSession(from);
+  await sendText(
+    from,
+    "Satış talebiniz iptal edildi 🙏 Yeniden başlamak isterseniz \"merhaba\" yazmanız yeterli."
+  );
 }
 
 async function satisSoruSor(from, session) {
@@ -952,7 +1041,23 @@ function satisOzetVerileriniHesapla(a, urunTipi) {
   return { urunAdiTam, ozetSatirlari, acilisMetni };
 }
 
+// satisTamamla'nin sonunda, akisi kimin baslattigina gore dogru "kapanis"a
+// donuyor: danisman ise kendi panelinin ana menusune (devamMenuGoster),
+// musteri kendi kendine basvurduysa ise oturumu sifirlayip normal musteri
+// akisina (conversationEngine) birakiyoruz - musteriye ASLA danisman
+// panelinin ana menusu (Yeni İş Talebi, Bekleyen İş, Performansım vb.)
+// gosterilmemeli.
+async function satisSonrasiKapat(from, session, musteriKendiKendine) {
+  if (musteriKendiKendine) {
+    resetSession(from);
+  } else {
+    await devamMenuGoster(from, session);
+  }
+}
+
 async function satisTamamla(from, session) {
+  const musteriKendiKendine = session.satisAnswers && session.satisAnswers._musteriKendiKendine === true;
+
   // Belge olmadan Garanti Emeklilik'e mail gitmesinin hicbir anlami yok -
   // normal akista buraya sadece 5 belge de kabul edildikten sonra
   // gelinebiliyor, ama savunmaci olarak yine de kontrol ediyoruz.
@@ -962,7 +1067,7 @@ async function satisTamamla(from, session) {
       from,
       "Belgeler eksik olduğu için kaydı tamamlayamadım 😕 Lütfen belgeleri tekrar göndermeyi deneyin, sorun devam ederse bana ulaşın."
     );
-    await devamMenuGoster(from, session);
+    await satisSonrasiKapat(from, session, musteriKendiKendine);
     return;
   }
 
@@ -975,15 +1080,20 @@ async function satisTamamla(from, session) {
       from,
       "Bazı bilgiler eksik göründüğü için kaydı tamamlayamadım 😕 Lütfen \"menü\" yazıp baştan tekrar deneyin, sorun devam ederse bana ulaşın."
     );
-    await devamMenuGoster(from, session);
+    await satisSonrasiKapat(from, session, musteriKendiKendine);
     return;
   }
 
   // Belgeleri tek PDF'te birlestirip mail gondermek birkac saniye surebiliyor -
-  // danismana bu sirada bir seyler oluyor sinyali verelim (hem Hayat hem BES
-  // icin gecerli, cunku bu fonksiyon ikisi tarafindan da paylasiliyor).
+  // bu sirada bir seyler oluyor sinyali verelim (hem Hayat hem BES, hem
+  // danisman hem musteri-kendi-kendine akisi icin gecerli, cunku bu
+  // fonksiyon hepsi tarafindan paylasiliyor).
   await sendText(from, "Evraklarınızı hazırlıyorum, bir saniye... 📎");
 
+  // Musteri kendi kendine basvurduysa "from" bir danismanin degil,
+  // musterinin kendi numarasidir - danismaniBul(from) burada null doner (ki
+  // bu dogrudur), gercek sorumlu danismani asagida resolveAgentNumber ile
+  // ayrica cozuyoruz (bkz. musteriDanismanNumarasi).
   const danisman = danismaniBul(from);
   const a = session.satisAnswers;
   const urunTipi = session.satisUrunTipi;
@@ -1012,48 +1122,128 @@ async function satisTamamla(from, session) {
     );
   }
 
+  // Musteri kendi kendine basvurduysa mail ASLA dogrudan Garanti
+  // Emeklilik'in gercek adreslerine gitmemeli - once ekip (Enbel)
+  // inceleyip uygun gorurse KENDISI Garanti Emeklilik'e iletecek. Onay
+  // adresi olarak once ozel MUSTERI_TALEP_ONAY_EPOSTA_ADRESI'ni, o
+  // tanimli degilse zaten var olan EPOSTA_YANIT_ADRESI'ni kullaniyoruz.
+  // Ikisi de tanimli degilse mail HIC GONDERILMIYOR - yanlislikla Garanti
+  // Emeklilik'e gitmesindense hic gitmemesi tercih edilir; kayit yine de
+  // panelde ve WhatsApp bildiriminde (asagida) kayboluyor degil.
+  const musteriOnayAdresi = musteriKendiKendine
+    ? process.env.MUSTERI_TALEP_ONAY_EPOSTA_ADRESI || process.env.EPOSTA_YANIT_ADRESI || null
+    : null;
+
   // Mail gonderim sonucunu artik BEKLIYORUZ (fire-and-forget degil) ki
   // danismana dogru bir onay mesaji gosterebilelim - eskiden mail gitse de
   // gitmese de (orn. OUTLOOK_EMAIL/OUTLOOK_APP_SIFRE Railway'de tanimli
   // degilse ya da SMTP hata verirse) danismana hep "Garanti Emeklilik'e
   // iletildi" deniyordu, bu yanlis bir onaydi.
-  const mailSonucu = await garantiEmekliligeGonder({
-    urunAdi: urunAdiTam,
-    musteriAdi: a.musteri_ad_soyad,
-    telefon: a.sigortali_cep,
-    ozetSatirlari,
-    ekBelgeler,
-    konuFormati: "satis", // konu satirini "Urun Adi Musteri Adi" formatinda kurar
-    acilisMetni
-  }).catch((err) => {
-    console.error("Garanti Emeklilik satis maili gonderilirken hata:", err.message);
-    return { basarili: false, sebep: err.message };
-  });
+  let mailSonucu;
+  if (musteriKendiKendine && !musteriOnayAdresi) {
+    console.warn(
+      "Musteri kendi kendine basvurdu ama MUSTERI_TALEP_ONAY_EPOSTA_ADRESI / EPOSTA_YANIT_ADRESI tanimli degil - onay maili gonderilemedi, sadece panel kaydi ve WhatsApp bildirimi ile devam ediliyor."
+    );
+    mailSonucu = {
+      basarili: false,
+      sebep: "MUSTERI_TALEP_ONAY_EPOSTA_ADRESI / EPOSTA_YANIT_ADRESI tanımlı değil"
+    };
+  } else {
+    mailSonucu = await garantiEmekliligeGonder({
+      urunAdi: urunAdiTam,
+      musteriAdi: a.musteri_ad_soyad,
+      telefon: a.sigortali_cep,
+      ozetSatirlari,
+      ekBelgeler,
+      konuFormati: "satis", // konu satirini "Urun Adi Musteri Adi" formatinda kurar
+      acilisMetni,
+      // Musteri kendi kendine basvurduysa Garanti Emeklilik yerine onay
+      // adresine gonderilsin (bkz. eposta.js aliciOverride) - danisman
+      // akisinda undefined kalir, davranis tamamen degismez.
+      aliciOverride: musteriKendiKendine ? [musteriOnayAdresi] : undefined
+    }).catch((err) => {
+      console.error("Satis maili gonderilirken hata:", err.message);
+      return { basarili: false, sebep: err.message };
+    });
+  }
+
+  // Musteri kendi kendine basvurduysa, bu satisi takip edecek gercek
+  // danismani (daha once "hangi danismanla gorustunuz" sorusuna verdigi
+  // cevaba, yoksa urunun varsayilan numarasina gore) coz - flows.js'teki
+  // ayni amacli mantikla (resolveAgentNumber) birebir tutarli olsun diye
+  // conversationEngine'deki fonksiyonu tekrar kullaniyoruz.
+  const ilgiliFlow = flows[urunTipi === "bes_yeni_is" ? "bes" : "hayat"];
+  const musteriDanismanNumarasi = musteriKendiKendine
+    ? conversationEngine.resolveAgentNumber(ilgiliFlow, { answers: { danisman_adi: a.satis_danisman_adi } })
+    : null;
 
   // Panelde de gorunmesi icin lead olarak da kaydediyoruz - mail basarisiz
   // olsa bile bu kayit HER ZAMAN olusturulur, boylece belgeler/bilgiler
   // kaybolmuyor ve panel uzerinden manuel takip edilebiliyor.
-  const kompaktDetay = `[${danisman ? danisman.name : "Danışman"} tarafından oluşturuldu - SATIŞ] ${urunAdiTam} • ${ozetSatirlari.join(" • ")}`;
+  const olusturanEtiketi = musteriKendiKendine
+    ? "Müşteri kendisi başvurdu"
+    : `${danisman ? danisman.name : "Danışman"} tarafından oluşturuldu`;
+  const kompaktDetay = `[${olusturanEtiketi} - SATIŞ] ${urunAdiTam} • ${ozetSatirlari.join(" • ")}`;
   const yeniLead = leadStore.yeniLeadOlustur({
     telefon: a.sigortali_cep,
     musteriAdi: a.musteri_ad_soyad,
     urun: urunAdiTam,
-    danismanAdi: danisman ? danisman.name : null,
-    danismanNumarasi: from,
+    danismanAdi: musteriKendiKendine ? a.satis_danisman_adi || null : danisman ? danisman.name : null,
+    danismanNumarasi: musteriKendiKendine ? musteriDanismanNumarasi : from,
     ozet: kompaktDetay
   });
   session.satisBelgeler.forEach((belge) => leadStore.belgeEkle(yeniLead.id, belge));
 
+  // Musteri kendi kendine basvurduysa, danisman devrede olmadigi icin bu
+  // satisi bir INSANIN (danisman) fark edebilmesi icin ayrica WhatsApp
+  // bildirimi gonderiyoruz - mail basarili/basarisiz FARK ETMEKSIZIN, cunku
+  // danismanin belgeleri gozden gecirip musteriyi karsılaması gerekiyor.
+  // guvenlikAgiNumaralari sayesinde Enbel her zaman ayrica haberdar oluyor.
+  if (musteriKendiKendine) {
+    const bildirilecekNumaralar = conversationEngine.guvenlikAgiNumaralari(ilgiliFlow, musteriDanismanNumarasi);
+    const detayliMetin =
+      `📋 Yeni bir satış talebi (müşteri kendi başvurdu)\n\n${olusturanEtiketi}${a.satis_danisman_adi ? ` (${a.satis_danisman_adi})` : ""}\n\n` +
+      ozetSatirlari.join("\n");
+    for (const numara of bildirilecekNumaralar) {
+      await conversationEngine.bildirimGonder(numara, urunAdiTam, a.musteri_ad_soyad, a.sigortali_cep, detayliMetin, kompaktDetay);
+    }
+  }
+
   if (mailSonucu && mailSonucu.basarili) {
+    if (musteriKendiKendine) {
+      // DIKKAT: mailSonucu.basarili burada sadece onay adresine (Enbel'e)
+      // basariyla ulastigini gosterir - Garanti Emeklilik'e HENUZ hicbir
+      // sey gitmedi, o yuzden musteriye "Garanti Emeklilik'e iletildi"
+      // DENMIYOR; ekip inceleyip uygun gorduginde iletecegi vurgulaniyor.
+      await sendText(
+        from,
+        `Satış talebiniz alındı ✅ ${urunAdiTam} için ilettiğiniz bilgiler ve belgeler ekibimize ulaştı. Kısa süre içinde inceleyip Garanti Emeklilik'e ileteceğiz, ardından belirttiğiniz tarih ve saat aralığında sizi arayacaklar. Bizi tercih ettiğiniz için teşekkür ederiz! 🙏`
+      );
+    } else {
+      await sendText(
+        from,
+        `Satış kaydı tamamlandı ✅ Ellerine sağlık! 🙌 ${a.musteri_ad_soyad} için ${urunAdiTam} kaydı Garanti Emeklilik'e iletildi.`
+      );
+      // Mail basariyla gittiyse (yani Garanti Emeklilik musteriyi gercekten
+      // arayacaksa) musteriye de bilgilendirme mesaji atalim - mail gitmediyse
+      // (asagidaki else) bu bildirimi ATLIYORUZ, cunku arama fiilen
+      // planlanmamis olabilir ve musteriye yanlis bir beklenti vermek istemeyiz.
+      // (Musteri kendi kendine basvurduysa bu ayrica bildirime gerek yok -
+      // yukaridaki tamamlanma mesaji zaten dogrudan kendisine gidiyor.)
+      await musteriyeSatisBildirimiGonder(a, urunAdiTam);
+    }
+  } else if (musteriKendiKendine) {
+    // Onay maili (Enbel'e) gitmedi - Garanti Emeklilik'e zaten hic
+    // gonderilmiyordu bu akista, o yuzden musteriye "Garanti Emeklilik'e
+    // gonderirken sorun oldu" DENMIYOR (yanlis olur) - kaydin/belgelerin
+    // guvenle alindigini ve ekibin panelden takip edecegini vurguluyoruz.
+    console.error(
+      `Musteri kendi kendine satis kaydi tamamlandi ama onay maili GONDERILEMEDI (${a.musteri_ad_soyad} - ${urunAdiTam}): ${mailSonucu ? mailSonucu.sebep : "bilinmeyen hata"}`
+    );
     await sendText(
       from,
-      `Satış kaydı tamamlandı ✅ Ellerine sağlık! 🙌 ${a.musteri_ad_soyad} için ${urunAdiTam} kaydı Garanti Emeklilik'e iletildi.`
+      `Satış talebiniz ve belgeleriniz alındı ✅ Ekibimiz talebinizi panel üzerinden inceleyip uygun görürse Garanti Emeklilik'e iletecek - sizin ekstra bir şey yapmanıza gerek yok. Bizi tercih ettiğiniz için teşekkür ederiz! 🙏`
     );
-    // Mail basariyla gittiyse (yani Garanti Emeklilik musteriyi gercekten
-    // arayacaksa) musteriye de bilgilendirme mesaji atalim - mail gitmediyse
-    // (asagidaki else) bu bildirimi ATLIYORUZ, cunku arama fiilen
-    // planlanmamis olabilir ve musteriye yanlis bir beklenti vermek istemeyiz.
-    await musteriyeSatisBildirimiGonder(a, urunAdiTam);
   } else {
     console.error(
       `Satis kaydi tamamlandi ama Garanti Emeklilik maili GONDERILEMEDI (${a.musteri_ad_soyad} - ${urunAdiTam}): ${mailSonucu ? mailSonucu.sebep : "bilinmeyen hata"}`
@@ -1063,7 +1253,7 @@ async function satisTamamla(from, session) {
       `Satış kaydınız ve belgeleriniz sisteme kaydedildi ✅ ancak Garanti Emeklilik'e mail gönderirken bir sorun oluştu ⚠️ Bu kayıt panelde duruyor, ekibimiz kontrol edip manuel olarak iletecek - sizin ekstra bir şey yapmanıza gerek yok.`
     );
   }
-  await devamMenuGoster(from, session);
+  await satisSonrasiKapat(from, session, musteriKendiKendine);
 }
 
 // "Yeni İş Talebi" sadece elementer branslar icindir (BES/Hayat icin ayri
@@ -1336,7 +1526,7 @@ async function handleAdvisorMessage(from, parsed) {
     // fotografini once Claude gorsel analiziyle kontrol edip (net mi, dogru
     // belge mi, imzaGerekli isaretliyse gercekten doldurulup imzalanmis mi)
     // sonra kabul ediyoruz.
-    if (session.state === "DANISMAN_SATIS_SORU") {
+    if (session.state === "DANISMAN_SATIS_SORU" || session.state === "MUSTERI_SATIS_SORU") {
       const soru = session.satisSorular[session.satisSoruIndex];
       if (soru && soru.type === "tekli_foto_belge") {
         if (!parsed.mimeType || !parsed.mimeType.startsWith("image/")) {
@@ -1375,7 +1565,7 @@ async function handleAdvisorMessage(from, parsed) {
           if (analiz && soru.imzaGerekli && !analiz.imzaliMi) {
             await sendText(
               from,
-              `Bu belge boş/imzasız bir şablon gibi görünüyor 🤔 ${analiz.aciklama || ""}\n\nLütfen ${sigortaliUnvani(session.satisAnswers, false)}ya doldurtup imzalattığınız belgenin fotoğrafını gönderir misiniz?`
+              `Bu belge boş/imzasız bir şablon gibi görünüyor 🤔 ${analiz.aciklama || ""}\n\nLütfen ${hitapEt(session.satisAnswers, `${sigortaliUnvani(session.satisAnswers, false)}ya doldurtup imzalattığınız`, "doldurup imzaladığınız")} belgenin fotoğrafını gönderir misiniz?`
             );
             return;
           }
@@ -1422,6 +1612,15 @@ async function handleAdvisorMessage(from, parsed) {
       }
       return;
     }
+    // Musteri kendi satis talebi akisinin ortasinda (ama su an fotograf
+    // BEKLENMEYEN bir soruda - orn. metin/secim sorusu) bir dosya
+    // gonderirse, danisman paneline ozel fallback mesaji ("Taleplerimi
+    // Gör...") yerine soruyu tekrarlayan nazik bir uyari veriyoruz.
+    if (session.state === "MUSTERI_SATIS_SORU") {
+      await sendText(from, "Şu an bir fotoğraf/döküman beklemiyorum 🙂 Az önceki soruyu yazıyla yanıtlar mısınız?");
+      await satisSoruSor(from, session);
+      return;
+    }
     await sendText(
       from,
       "Bu belgeyi bir talebe eklemek için önce 'Taleplerimi Gör' ile ilgili talebi açmanız gerekiyor."
@@ -1445,11 +1644,19 @@ async function handleAdvisorMessage(from, parsed) {
   // yazarak) akis yanlislikla bastan ana menuye donuyordu - cevap hic
   // kaydedilmiyordu. "Hayır" boyle bir catisma yaratmiyor cunku zaten bu
   // listede hic yoktu.
+  // Musteri kendi satis talebi akisindaysa ("MUSTERI_SATIS_SORU") bu kisayol
+  // ASLA danismanin ana menusunu (karsilamaGoster) gostermemeli - musteriye
+  // internal panel menusu sizmasin diye once bunu ayirt ediyoruz (bkz.
+  // musteriSatisIptalEt).
   if (
     parsed.type === "text" &&
     /^(men[uü]|iptal|geri|merhaba|selam|slm|mrb|hey|hi|hello|g[uü]naydin|iyi g[uü]nler)$/i.test(userText || "")
   ) {
-    await karsilamaGoster(from, session);
+    if (session.state === "MUSTERI_SATIS_SORU") {
+      await musteriSatisIptalEt(from, session);
+    } else {
+      await karsilamaGoster(from, session);
+    }
     return;
   }
 
@@ -1776,10 +1983,17 @@ async function handleAdvisorMessage(from, parsed) {
     }
 
     // --- Satis kaydi akisi ---
-    case "DANISMAN_SATIS_SORU": {
-      // "geri al" - danisman bir onceki soruda yazdigi/sectigi cevabi
-      // duzeltmek isterse (orn. eposta yanlis yazildiysa), bir onceki
-      // gecerli (skipIf ile atlanmamis) soruya donup o soruyu tekrar sorar.
+    // Musteri kendi kendine satis talebi olustururken (MUSTERI_SATIS_SORU)
+    // AYNI soru/cevap/geri-al mantigini paylasiyor - tek fark hangi soru
+    // listesinin (session.satisSorular icindeki 2. sahis metinleri, bkz.
+    // hitapEt) ve hangi tamamlanma davranisinin (satisTamamla icindeki
+    // musteriKendiKendine kontrolu) kullanildigi, o da session.satisAnswers
+    // uzerinden zaten otomatik cozuluyor.
+    case "DANISMAN_SATIS_SORU":
+    case "MUSTERI_SATIS_SORU": {
+      // "geri al" - bir onceki soruda yazdigi/sectigi cevabi duzeltmek
+      // isterse (orn. eposta yanlis yazildiysa), bir onceki gecerli (skipIf
+      // ile atlanmamis) soruya donup o soruyu tekrar sorar.
       // Foto/belge sorularina donulurse, o adimda yuklenen belge de
       // (satisBelgeler'den dosyaAdi'na gore) geri alinir ki tekrar
       // yuklenebilsin.
@@ -1933,4 +2147,4 @@ async function handleAdvisorMessage(from, parsed) {
   }
 }
 
-module.exports = { isDanisman, handleAdvisorMessage };
+module.exports = { isDanisman, handleAdvisorMessage, musteriSatisBaslat };

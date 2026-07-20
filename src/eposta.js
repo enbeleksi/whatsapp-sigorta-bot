@@ -1,6 +1,10 @@
 // BES ve Prim Iadeli Hayat Sigortasi taleplerini Garanti Emeklilik'e otomatik
 // mail olarak yonlendirir - onlar bu talepleri kendi is akislarina ekleyip
-// cagri merkezlerinden musteriyi ariyorlar.
+// cagri merkezlerinden musteriyi ariyorlar. TEK ISTISNA: musteri satis
+// talebini KENDI KENDINE olusturdugunda (danisman aradan gecmeden), mail
+// Garanti Emeklilik'e DEGIL, once ekibin onayina gider (bkz. asagidaki
+// aliciOverride ve advisorEngine.js satisTamamla) - ekip uygun gorurse
+// kendisi Garanti Emeklilik'e iletir.
 //
 // Resend (resend.com) HTTPS API'si uzerinden gonderilir. ESKIDEN Outlook/
 // Microsoft 365 SMTP kullaniliyordu ama Railway'den smtp.office365.com:587'e
@@ -44,6 +48,15 @@ function bekle(ms) {
 //   override eder (orn. musterinin aranmasini istedigi tarih/saat araligi).
 //   Verilmezse eski sabit metne ("Müşterimizin uzaktan aranmasını rica
 //   ederiz.") geri duser.
+// aliciOverride: (istege bagli) tanimliysa mail Garanti Emeklilik'in gercek
+//   adreslerine DEGIL, bu adres/adres listesine gider - konu satirina da
+//   "[ONAYINIZI BEKLIYOR]" eklenir. Musteri KENDI KENDINE basvurdugunda
+//   (bkz. advisorEngine.js satisTamamla, musteriKendiKendine) talep
+//   dogrudan Garanti Emeklilik'e degil, once inceleme icin kullanilir -
+//   danisman/ekip uygun gorursen kendisi Garanti Emeklilik'e iletir.
+//   EPOSTA_TEST_ADRESI (global test yonlendirmesi) tanimliysa HER ZAMAN
+//   ondan once gelir - test sirasinda hicbir mail (bu dahil) gercek bir
+//   kutuya gitmemeli.
 async function garantiEmekliligeGonder({
   urunAdi,
   musteriAdi,
@@ -51,7 +64,8 @@ async function garantiEmekliligeGonder({
   ozetSatirlari,
   ekBelgeler,
   konuFormati = "teklif",
-  acilisMetni
+  acilisMetni,
+  aliciOverride
 }) {
   const apiKey = process.env.RESEND_API_KEY;
   const gonderenAdresi = process.env.EPOSTA_GONDEREN_ADRESI;
@@ -66,10 +80,21 @@ async function garantiEmekliligeGonder({
   // Emeklilik'e DEGIL, bu test adresine gider - boylece gercek adresi
   // gereksiz yere meşgul etmeden deneme yapabiliriz. Test bitince bu
   // degiskeni Railway'den kaldirmaniz yeterli, otomatik olarak gercek
-  // alicilara donulur.
+  // alicilara donulur. aliciOverride'dan ONCE kontrol ediliyor, cunku test
+  // modundayken musteri-onay mailinin de gercek bir kutuya gitmemesi lazim.
   const testAdresi = process.env.EPOSTA_TEST_ADRESI;
-  const aliciListesi = testAdresi ? [testAdresi] : GARANTI_EMEKLILIK_ALICILARI;
-  const konuOnEki = testAdresi ? "[TEST] " : "";
+  let aliciListesi;
+  let konuOnEki;
+  if (testAdresi) {
+    aliciListesi = [testAdresi];
+    konuOnEki = "[TEST] ";
+  } else if (aliciOverride && aliciOverride.length > 0) {
+    aliciListesi = aliciOverride;
+    konuOnEki = "[ONAYINIZI BEKLIYOR] ";
+  } else {
+    aliciListesi = GARANTI_EMEKLILIK_ALICILARI;
+    konuOnEki = "";
+  }
 
   const konu =
     konuFormati === "satis"
@@ -106,9 +131,14 @@ async function garantiEmekliligeGonder({
   //     bu adrese (orn. enbel@outlook.com.tr) gider, "from" adresine degil.
   //   - Cc: gonderilen mailin bir kopyasi ANINDA bu kutuya da duser, boylece
   //     her satis/teklif maili panele bakmadan da takip edilebiliyor.
+  // aliciListesi zaten EPOSTA_YANIT_ADRESI'ni iceriyorsa (orn. musteri-onay
+  // mailinde aliciOverride bu adresin kendisiyse) Cc'yi tekrar eklemiyoruz -
+  // ayni adrese ayni maili iki kez dusurmenin bir anlami yok.
   if (process.env.EPOSTA_YANIT_ADRESI) {
     govdeJson.reply_to = process.env.EPOSTA_YANIT_ADRESI;
-    govdeJson.cc = [process.env.EPOSTA_YANIT_ADRESI];
+    if (!aliciListesi.includes(process.env.EPOSTA_YANIT_ADRESI)) {
+      govdeJson.cc = [process.env.EPOSTA_YANIT_ADRESI];
+    }
   }
 
   // "Connection timeout" gibi hatalar cogunlukla GECICI bir ag sorunudur -
@@ -133,8 +163,13 @@ async function garantiEmekliligeGonder({
         throw new Error(`Resend API hatasi (HTTP ${response.status}): ${hataMetni}`);
       }
 
+      const aliciAciklamasi = testAdresi
+        ? "TEST MODU: " + testAdresi
+        : aliciOverride && aliciOverride.length > 0
+          ? "ONAY BEKLEYEN (Garanti Emeklilik'e degil): " + aliciListesi.join(", ")
+          : "GERCEK ALICILAR";
       console.log(
-        `Garanti Emeklilik maili gonderildi (${testAdresi ? "TEST MODU: " + testAdresi : "GERCEK ALICILAR"}, ${attachments.length} ek, ${deneme}. denemede): ${urunAdi} - ${musteriAdi}`
+        `Garanti Emeklilik maili gonderildi (${aliciAciklamasi}, ${attachments.length} ek, ${deneme}. denemede): ${urunAdi} - ${musteriAdi}`
       );
       return { basarili: true };
     } catch (err) {

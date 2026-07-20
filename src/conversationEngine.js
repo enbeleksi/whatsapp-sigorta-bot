@@ -106,7 +106,35 @@ function nextValidIndex(flow, answers, fromIndex) {
 // direkt soru sormaya baslamadan once kisa bir tanitim mesaji gonderir - ancak
 // QR ile giriste (skipIntro=true) bu atlanir, cunku o zaten kendi karsilama
 // mesajini (qrGreeting) gostermis oluyor.
+// "hayat" ve "bes" icin, eskiden burada kisa/hafif bir "teklif" sorusu
+// dizisi (flows.js'teki questions) calisirdi - artik bunun yerine
+// advisorEngine.js'deki TAM satis kaydi akisini (TC kimlik, prim/katkı payı
+// tutarı, belgeler, aranma tarihi/saati vb.) musterinin kendisi icin
+// baslatiyoruz, boylece musteri araya bir danisman girmeden dogrudan satis
+// talebinde bulunabiliyor. advisorEngine.js da bu dosyayi (conversationEngine)
+// modul-seviyesinde require ettigi icin, dairesel bagimliliga (require
+// dongusune) girmemek adina advisorEngine'i BURADA, fonksiyon icinde ve
+// SADECE ihtiyac aninda require ediyoruz (Node bu noktada her iki modul de
+// tam yuklenmis oldugu icin guvenli calisir - modul-seviyesinde yapilsaydi
+// yarim yuklenmis/bos bir exports nesnesi yakalanirdi).
+const MUSTERI_SATIS_URUN_TIPLERI = { hayat: "hayat", bes: "bes_yeni_is" };
+
+// Bir urunun soru akisini baslatir. Musterinin adi zaten biliniyorsa (session.name)
+// ve o urunun ad_soyad sorusu hesap sahibinin kendi adini soruyorsa (sameAsAccountHolder),
+// bu soruyu tekrar sormadan otomatik doldurur. Urunun "intro" metni varsa,
+// direkt soru sormaya baslamadan once kisa bir tanitim mesaji gonderir - ancak
+// QR ile giriste (skipIntro=true) bu atlanir, cunku o zaten kendi karsilama
+// mesajini (qrGreeting) gostermis oluyor.
+// Donus degeri: true ise cagiran taraf askCurrentQuestion'i AYRICA
+// COGIRMAMALI - advisorEngine'e devredilen bir akista ilk soru zaten
+// gonderilmis oluyor.
 async function startProductFlow(from, session, productKey, { skipIntro = false } = {}) {
+  if (MUSTERI_SATIS_URUN_TIPLERI[productKey]) {
+    const advisorEngine = require("./advisorEngine");
+    await advisorEngine.musteriSatisBaslat(from, session, MUSTERI_SATIS_URUN_TIPLERI[productKey]);
+    return true;
+  }
+
   const flow = flows[productKey];
   session.product = productKey;
   session.answers = {};
@@ -122,6 +150,7 @@ async function startProductFlow(from, session, productKey, { skipIntro = false }
   if (flow.intro && !skipIntro) {
     await sendText(from, flow.intro);
   }
+  return false;
 }
 
 // Yeni bir konusma baslatir (KVKK oncesi karsilama). QR kodundan gelen hazir
@@ -337,6 +366,19 @@ async function handleIncoming(from, message) {
   // Bot duraklatilmissa (temsilci devraldiysa) hicbir otomatik islem yapma,
   // sadece mesaji panelde gorunecek sekilde kaydet ve cik.
   if (session.paused) {
+    return;
+  }
+
+  // Musteri kendi kendine satis talebi akisindaysa (startProductFlow'un
+  // "hayat"/"bes" icin advisorEngine'e devrettigi durum - bkz. o dosyadaki
+  // musteriSatisBaslat), BUNDAN SONRAKI TUM mesajlari (metin/interaktif/
+  // fotograf, "geri al" dahil) advisorEngine'in kendi soru-cevap motoruna
+  // devrediyoruz - o motor zaten bu durumu (MUSTERI_SATIS_SORU) tamamen
+  // kendi icinde yonetiyor, burada tekrar bir mantik kurmuyoruz. Lazy
+  // require (yorumdaki dairesel bagimlilik notuna bkz. startProductFlow).
+  if (session.state === "MUSTERI_SATIS_SORU") {
+    const advisorEngine = require("./advisorEngine");
+    await advisorEngine.handleAdvisorMessage(from, message);
     return;
   }
 
@@ -569,8 +611,8 @@ async function handleIncoming(from, message) {
       if (session.pendingProduct) {
         const key = session.pendingProduct;
         session.pendingProduct = null;
-        await startProductFlow(from, session, key, { skipIntro: true });
-        await askCurrentQuestion(from, session);
+        const devredildi = await startProductFlow(from, session, key, { skipIntro: true });
+        if (!devredildi) await askCurrentQuestion(from, session);
       } else if (session.name) {
         session.state = "ASK_PRODUCT";
         await sendList(
@@ -614,8 +656,8 @@ async function handleIncoming(from, message) {
         break;
       }
       const idx = PRODUCT_LABELS.indexOf(matchedLabel);
-      await startProductFlow(from, session, PRODUCT_KEYS[idx]);
-      await askCurrentQuestion(from, session);
+      const devredildi = await startProductFlow(from, session, PRODUCT_KEYS[idx]);
+      if (!devredildi) await askCurrentQuestion(from, session);
       break;
     }
 
@@ -908,5 +950,6 @@ module.exports = {
   kompaktDetayOlustur,
   bildirimGonder,
   guvenlikAgiNumaralari,
+  resolveAgentNumber,
   sablonParametresiIcinTemizle
 };
