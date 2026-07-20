@@ -18,6 +18,7 @@ const { garantiEmekliligeGonder } = require("./eposta");
 const {
   tcKimlikGecerliMi,
   tarihGecerliMi,
+  tarihiNormallestir,
   plakaGecerliMi,
   yenilemeTarihiGecerliMi,
   aramaTarihiGecerliMi,
@@ -62,11 +63,29 @@ function flowBulUrunAdindan(urunAdi) {
 // zorunda kalmiyor.
 const SABIT_SABLONLAR = [
   { dosyaYolu: path.join(__dirname, "sablonlar", "acik_riza_metni.pdf"), dosyaAdi: "Garanti Açık Rıza Metni.pdf" },
-  { dosyaYolu: path.join(__dirname, "sablonlar", "imza_karti.pdf"), dosyaAdi: "İletişim Bilgileri ve Islak İmza Kartı.pdf" }
+  // BES Yeni İş'te ıslak imza kartı istenmiyor (bkz. asagida SATIS_SORULARI_BES_YENI_IS
+  // filtrelemesi) - o yuzden bu bos sablonu da SADECE Hayat'ta gonderiyoruz,
+  // BES'te danismana ihtiyaci olmayan bir form gondermeyelim.
+  {
+    dosyaYolu: path.join(__dirname, "sablonlar", "imza_karti.pdf"),
+    dosyaAdi: "İletişim Bilgileri ve Islak İmza Kartı.pdf",
+    sadeceHayatta: true
+  }
 ];
 
-async function sabitSablonlariGonder(from) {
-  for (const sablon of SABIT_SABLONLAR) {
+// Vefat teminati 500.000 USD'nin uzerinde oldugunda ayrica istenen Saglik
+// Beyan Formu'nun BOS sablonu - danismanin sigortaliya yazdirip
+// doldurtmasi/imzalatmasi icin, tipki acik riza/imza karti sablonlari gibi
+// belge sorusuna gelindiginde otomatik gonderiliyor (bkz. asagida
+// satisSoruSor'daki soru.sablonGonder === "saglikBeyani" kontrolu).
+const SAGLIK_BEYAN_SABLONU = {
+  dosyaYolu: path.join(__dirname, "sablonlar", "saglik_beyan_formu.pdf"),
+  dosyaAdi: "Sağlık Beyan Formu (Boş).pdf"
+};
+
+async function sabitSablonlariGonder(from, urunTipi) {
+  const gonderilecekler = urunTipi === "bes_yeni_is" ? SABIT_SABLONLAR.filter((s) => !s.sadeceHayatta) : SABIT_SABLONLAR;
+  for (const sablon of gonderilecekler) {
     try {
       const buffer = fs.readFileSync(sablon.dosyaYolu);
       await sendDocument(from, buffer, "application/pdf", sablon.dosyaAdi);
@@ -74,6 +93,171 @@ async function sabitSablonlariGonder(from) {
       console.error(`Sabit sablon gonderilemedi (${sablon.dosyaAdi}):`, err.message);
     }
   }
+}
+
+async function saglikBeyanSablonuGonder(from) {
+  try {
+    const buffer = fs.readFileSync(SAGLIK_BEYAN_SABLONU.dosyaYolu);
+    await sendDocument(from, buffer, "application/pdf", SAGLIK_BEYAN_SABLONU.dosyaAdi);
+  } catch (err) {
+    console.error(`Saglik beyan formu sablonu gonderilemedi:`, err.message);
+  }
+}
+
+// --- "Musteri" kelimesi lugatimizdan kaldirildi: BES'te (Bireysel Emeklilik)
+// dogru terim "katilimci", diger tum urunlerde (Hayat, elementer) "sigortali".
+// Soru metinlerinde/mesajlarda bu fonksiyon kullanilir - answers._urunTipi
+// satisAkisiBaslat'ta baslangicta yazilir (bkz. asagida).
+// buyukHarfle: true ise cumle basi ("Katılımcı"/"Sigortalı"), false ise
+// cumle ici ("katılımcı"/"sigortalı").
+function sigortaliUnvani(answers, buyukHarfle) {
+  const besMi = answers && answers._urunTipi === "bes_yeni_is";
+  const unvan = besMi ? "katılımcı" : "sigortalı";
+  return buyukHarfle ? unvan.charAt(0).toUpperCase() + unvan.slice(1) : unvan;
+}
+
+// "USD 450,00", "TL 5.000,00", "5000" gibi Turkce bicimli bir tutar
+// metninden sayisal degeri cikarir - nokta binlik ayraci, virgul ondalik
+// ayraci olarak yorumlanir (orn. "5.000,00" -> 5000). Ayristiramazsa NaN doner.
+function tutarSayiyaCevir(value) {
+  const v = (value || "").replace(/[^\d.,]/g, "");
+  if (!v) return NaN;
+  if (v.includes(".") && v.includes(",")) {
+    return Number(v.replace(/\./g, "").replace(",", "."));
+  }
+  if (v.includes(",")) {
+    return Number(v.replace(",", "."));
+  }
+  // SADECE nokta varsa (virgul yok) - Turkce yazim kuralina gore nokta
+  // BINLIK AYIRICIDIR (asla ondalik degil, ondalik icin virgul kullanilir),
+  // o yuzden "600.000" gibi bir girdi 600 degil 600000 olarak okunmali.
+  // Bu kontrol olmadan (eski davranis) "600.000" yanlislikla 600'e
+  // yuvarlaniyordu - bu da hem asgari prim/katki payi kontrolunu hem de
+  // 500.000 USD vefat teminati esigini yanlis hesaplatiyordu.
+  if (v.includes(".")) {
+    return Number(v.replace(/\./g, ""));
+  }
+  return Number(v);
+}
+
+// Danismanlarin girdigi prim/katki payi tutarinin dusmemesi gereken asgari
+// tutar - Hayat'ta pakete gore (Standart 150 USD, Premium 300 USD), BES'te
+// (katki payi) 5.000 TL. answers.paket sadece Hayat'ta doldurulur (BES'te bu
+// soru yok), o yuzden BES kontrolu once yapiliyor.
+function primAsgariBilgisi(answers) {
+  if (answers && answers._urunTipi === "bes_yeni_is") {
+    return { asgari: 5000, birim: "TL" };
+  }
+  if (answers && answers.paket === "Premium") {
+    return { asgari: 300, birim: "USD" };
+  }
+  return { asgari: 150, birim: "USD" };
+}
+
+function primTutariVeMinimumGecerliMi(value, answers) {
+  if (!primTutariGecerliMi(value)) return false;
+  const sayi = tutarSayiyaCevir(value);
+  if (Number.isNaN(sayi)) return false;
+  return sayi >= primAsgariBilgisi(answers).asgari;
+}
+
+function primMinimumHatasi(value, answers) {
+  if (!primTutariGecerliMi(value) || Number.isNaN(tutarSayiyaCevir(value))) {
+    return "Bu bir tutar gibi görünmüyor, lütfen rakamla birlikte tekrar yazar mısınız?";
+  }
+  const { asgari, birim } = primAsgariBilgisi(answers);
+  const paketNotu = answers && answers.paket ? `${answers.paket} paket için ` : "";
+  return (
+    `Girilen tutar asgari tutarın altında görünüyor, bu tutarı kabul edemiyorum ⚠️ ${paketNotu}asgari tutar ` +
+    `${birim} ${asgari.toLocaleString("tr-TR")} olmalıdır, lütfen bu tutarın üzerinde bir değer paylaşır mısınız?`
+  );
+}
+
+// --- Arama tarihi/saati icin secenek uretimi (task: danisman serbest metin
+// yazmak yerine listeden secsin) ---
+const HAFTA_GUNLERI = ["Pazar", "Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi"];
+const SAAT_ARALIKLARI = ["08:00-10:00", "10:00-12:00", "12:00-14:00", "14:00-16:00", "16:00-18:00"];
+// Son aralik 16:00'da basliyor, "bugunse en az 2 saat sonrasi" kurali
+// geregi bu saatten (16:00 - 2 saat = 14:00) sonra bugun icin hicbir uygun
+// aralik kalmiyor - o yuzden "bugun" secenegi bu saatten sonra listeye hic
+// eklenmiyor (bkz. asagida bugundenBaslayanHaftaIciGunleri).
+const BUGUN_ICIN_SON_MAKUL_DK = 16 * 60 - 120;
+
+// Bugunden baslayarak (gerekirse yarindan), hafta sonlarini (Cumartesi/
+// Pazar) ATLAYARAK ilk `adet` kadar HAFTA ICI gunu Date olarak dondurur -
+// cagri merkezi hafta sonlari calismiyor, bu yuzden secenek olarak hic
+// sunmuyoruz.
+function bugundenBaslayanHaftaIciGunleri(adet) {
+  const simdi = new Date();
+  const simdiDk = simdi.getHours() * 60 + simdi.getMinutes();
+  let cursor = new Date(simdi.getFullYear(), simdi.getMonth(), simdi.getDate());
+  if (simdiDk > BUGUN_ICIN_SON_MAKUL_DK) {
+    cursor = new Date(cursor.getTime() + 24 * 60 * 60 * 1000);
+  }
+  const gunler = [];
+  while (gunler.length < adet) {
+    const gun = cursor.getDay();
+    if (gun !== 0 && gun !== 6) {
+      gunler.push(new Date(cursor));
+    }
+    cursor = new Date(cursor.getTime() + 24 * 60 * 60 * 1000);
+  }
+  return gunler;
+}
+
+function ikiHane(n) {
+  return String(n).padStart(2, "0");
+}
+
+// Bir Date'i hem kanonik deger ("GG.AA.YYYY") hem de danismana gosterilecek
+// kisa etikete ("Bugün", "Yarın" ya da "Perşembe (17.07)") cevirir.
+function tarihSecenegiOlustur(tarih) {
+  const simdi = new Date();
+  const bugunMu =
+    tarih.getFullYear() === simdi.getFullYear() &&
+    tarih.getMonth() === simdi.getMonth() &&
+    tarih.getDate() === simdi.getDate();
+  const yarin = new Date(simdi.getFullYear(), simdi.getMonth(), simdi.getDate() + 1);
+  const yarinMi =
+    tarih.getFullYear() === yarin.getFullYear() &&
+    tarih.getMonth() === yarin.getMonth() &&
+    tarih.getDate() === yarin.getDate();
+
+  const gunAdi = HAFTA_GUNLERI[tarih.getDay()];
+  const gunAyMetni = `${ikiHane(tarih.getDate())}.${ikiHane(tarih.getMonth() + 1)}`;
+  const kisaEtiket = bugunMu ? "Bugün" : yarinMi ? "Yarın" : `${gunAdi} (${gunAyMetni})`;
+
+  return {
+    deger: `${ikiHane(tarih.getDate())}.${ikiHane(tarih.getMonth() + 1)}.${tarih.getFullYear()}`,
+    kisaEtiket
+  };
+}
+
+// arama_tarihi sorusunun "options"/"kisaSecenekler" fonksiyonlari - 5 hafta
+// ici gun secenegi uretir.
+function aramaTarihiSecenekleri() {
+  return bugundenBaslayanHaftaIciGunleri(5).map((t) => tarihSecenegiOlustur(t).deger);
+}
+function aramaTarihiKisaSecenekleri() {
+  return bugundenBaslayanHaftaIciGunleri(5).map((t) => tarihSecenegiOlustur(t).kisaEtiket);
+}
+
+// arama_saat_araligi sorusunun secenekleri - secilen tarih BUGUNSE, su anki
+// saatten (+2 saat kurali ile) once baslayan araliklari listeden cikarir.
+function aramaSaatAraligiSecenekleri(answers) {
+  if (!answers || !answers.arama_tarihi || !aramaTarihiBugunMu(answers.arama_tarihi)) {
+    return SAAT_ARALIKLARI;
+  }
+  const simdi = new Date();
+  const simdiDk = simdi.getHours() * 60 + simdi.getMinutes();
+  const uygunlar = SAAT_ARALIKLARI.filter((araligi) => {
+    const [baslangicSaat, baslangicDk] = araligi.split("-")[0].split(":").map(Number);
+    return baslangicSaat * 60 + baslangicDk >= simdiDk + 120;
+  });
+  // Beklenmedik bir durumda (orn. saat kaymasi) hicbir aralik kalmazsa, bos
+  // liste yerine tum araliklari gosterip kullaniciyi tikanmis birakmamak
+  // daha güvenli - saatAraligiGecerliMi zaten gecmis bir secimi reddedecektir.
+  return uygunlar.length > 0 ? uygunlar : SAAT_ARALIKLARI;
 }
 
 const SATIS_SORULARI_HAYAT = [
@@ -90,48 +274,70 @@ const SATIS_SORULARI_HAYAT = [
   },
   {
     id: "musteri_ad_soyad",
-    text: "Müşterinin adını ve soyadını paylaşır mısınız?",
+    text: (a) => `${sigortaliUnvani(a, true)}nın adını ve soyadını paylaşır mısınız?`,
     type: "text",
     validate: adSoyadGecerliMi,
     validationError: "Lütfen adı ve soyadı birlikte yazar mısınız? (Örn: Ahmet Yılmaz)"
   },
+  // "Müşteri kelimesini lugatımızdan kaldırıyoruz" karari geregi, TCK sormadan
+  // once artik T.C. vatandaşlığını soruyoruz - "Evet" ise uyruk otomatik
+  // "T.C." sayilip TCK isteniyor, "Hayır" ise serbest metin uyruk + TCK
+  // yerine Mavi Kart numarasi isteniyor (bkz. asagidaki 3 soru).
+  {
+    id: "sigortali_tc_vatandasi_mi",
+    text: (a) => `${sigortaliUnvani(a, true)} Türkiye Cumhuriyeti vatandaşı mı?`,
+    type: "choice",
+    options: ["Evet", "Hayır"]
+  },
   {
     id: "sigortali_tck",
-    text: "Sigortalının T.C. kimlik numarasını paylaşır mısınız?",
+    text: (a) => `${sigortaliUnvani(a, true)}nın T.C. kimlik numarasını paylaşır mısınız?`,
     type: "text",
     validate: tcKimlikGecerliMi,
-    validationError: "Girilen T.C. kimlik numarası geçerli görünmüyor, lütfen 11 haneli olarak tekrar yazar mısınız?"
+    validationError: "Girilen T.C. kimlik numarası geçerli görünmüyor, lütfen 11 haneli olarak tekrar yazar mısınız?",
+    skipIf: (a) => a.sigortali_tc_vatandasi_mi !== "Evet"
+  },
+  {
+    id: "sigortali_mavi_kart_no",
+    text: (a) => `${sigortaliUnvani(a, true)}nın Mavi Kart numarasını paylaşır mısınız?`,
+    type: "text",
+    validate: bosDegilMi,
+    validationError: "Bu alanı boş bırakamayız, lütfen Mavi Kart numarasını paylaşır mısınız?",
+    skipIf: (a) => a.sigortali_tc_vatandasi_mi !== "Hayır"
   },
   {
     id: "sigortali_dogum_tarihi",
-    text: "Sigortalının doğum tarihini paylaşır mısınız? (GG.AA.YYYY)",
+    text: (a) => `${sigortaliUnvani(a, true)}nın doğum tarihini paylaşır mısınız? (Örn: 04.08.1997 ya da 4.8.97)`,
     type: "text",
     validate: tarihGecerliMi,
-    validationError: "Lütfen tarihi GG.AA.YYYY formatında yazar mısınız? (Örn: 04.08.1997)"
+    normalize: tarihiNormallestir,
+    validationError: "Lütfen geçerli bir tarih yazar mısınız? (Örn: 04.08.1997 ya da 4.8.97)"
   },
   {
     id: "sigortali_cinsiyet",
-    text: "Sigortalının cinsiyeti nedir?",
+    text: (a) => `${sigortaliUnvani(a, true)}nın cinsiyeti nedir?`,
     type: "choice",
     options: ["Kadın", "Erkek"]
   },
   {
     id: "sigortali_uyruk",
-    text: "Sigortalının uyruğunu paylaşır mısınız? (Örn: T.C.)",
+    text: (a) => `T.C. vatandaşı olmadığını belirttiniz, ${sigortaliUnvani(a, false)}nın uyruğunu paylaşır mısınız? (Örn: Alman)`,
     type: "text",
     validate: bosDegilMi,
-    validationError: "Bu alanı boş bırakamayız, lütfen sigortalının uyruğunu paylaşır mısınız?"
+    validationError: "Bu alanı boş bırakamayız, lütfen uyruğu paylaşır mısınız?",
+    skipIf: (a) => a.sigortali_tc_vatandasi_mi !== "Hayır"
   },
   {
     id: "sigortali_dogum_yeri",
-    text: "Sigortalının doğum yerini paylaşır mısınız? (Örn: Adana)",
+    text: (a) => `${sigortaliUnvani(a, true)}nın doğum yerini paylaşır mısınız? (Örn: Adana)`,
     type: "text",
     validate: bosDegilMi,
-    validationError: "Bu alanı boş bırakamayız, lütfen sigortalının doğum yerini paylaşır mısınız?"
+    validationError: "Bu alanı boş bırakamayız, lütfen doğum yerini paylaşır mısınız?"
   },
   {
     id: "odeyen_farkli_mi",
-    text: "Primi ödeyecek kişi sigortalının kendisi mi?",
+    text: (a) =>
+      `${a._urunTipi === "bes_yeni_is" ? "Katkı payını" : "Primi"} ödeyecek kişi ${sigortaliUnvani(a, false)}nın kendisi mi?`,
     type: "choice",
     options: ["Evet, Kendisi", "Hayır, Farklı Biri"]
   },
@@ -165,16 +371,29 @@ const SATIS_SORULARI_HAYAT = [
   },
   {
     id: "odeme_donemi",
-    text: "Ödeme dönemi nedir? (Not: poliçe süresi boyunca değiştirilemez.)",
+    // BES'te odeme donemi police suresi boyunca HER ZAMAN degistirilebiliyor
+    // (Hayat'ta degistirilemiyor) - bu yuzden uyari sadece Hayat'ta gosteriliyor.
+    text: (a) =>
+      a._urunTipi === "bes_yeni_is"
+        ? "Ödeme dönemi nedir?"
+        : "Ödeme dönemi nedir? (Not: poliçe süresi boyunca değiştirilemez.)",
     type: "choice",
     options: ["Aylık", "Üç Aylık", "Altı Aylık", "Yıllık"]
   },
   {
     id: "prim_tutari",
-    text: (a) => `Hesaplayıcıdan bulduğunuz ${a.odeme_donemi || ""} prim tutarını paylaşır mısınız? (Örn: USD 450,00)`,
+    // BES'te "hesaplayici" diye bir arac yok (o sadece Hayat'ta vefat teminati
+    // hesaplamak icin kullaniliyor) - BES'te dogru terim "katki payi tutari".
+    text: (a) =>
+      a._urunTipi === "bes_yeni_is"
+        ? `Katılımcının ödeyeceği ${a.odeme_donemi || ""} katkı payı tutarını paylaşır mısınız? (Örn: TL 5.000,00)`
+        : `Hesaplayıcıdan bulduğunuz ${a.odeme_donemi || ""} prim tutarını paylaşır mısınız? (Örn: USD 450,00)`,
     type: "text",
-    validate: primTutariGecerliMi,
-    validationError: "Bu bir prim tutarı gibi görünmüyor, lütfen rakamla birlikte tekrar yazar mısınız? (Örn: USD 450,00)"
+    // Asgari tutarin altinda bir deger girilirse KABUL ETMIYORUZ (Hayat
+    // Standart 150 USD, Premium 300 USD; BES 5.000 TL) - bkz. yukarida
+    // primTutariVeMinimumGecerliMi / primMinimumHatasi.
+    validate: primTutariVeMinimumGecerliMi,
+    validationError: primMinimumHatasi
   },
   // Sadece Hayat'ta soruluyor (BES listesine dahil edilmiyor, asagida
   // SATIS_SORULARI_BES_YENI_IS filtrelemesine bakin) - vefat teminatini
@@ -188,14 +407,14 @@ const SATIS_SORULARI_HAYAT = [
   },
   {
     id: "sigortali_cep",
-    text: "Sigortalının cep telefonu numarasını paylaşır mısınız?",
+    text: (a) => `${sigortaliUnvani(a, true)}nın cep telefonu numarasını paylaşır mısınız?`,
     type: "text",
     validate: telefonGecerliMi,
     validationError: "Girilen cep telefonu numarası geçerli görünmüyor, lütfen tekrar yazar mısınız? (Örn: 0555 123 45 67)"
   },
   {
     id: "sigortali_eposta",
-    text: "Sigortalının e-posta adresini paylaşır mısınız?",
+    text: (a) => `${sigortaliUnvani(a, true)}nın e-posta adresini paylaşır mısınız?`,
     type: "text",
     validate: epostaGecerliMi,
     validationError: "Girilen e-posta adresi geçerli görünmüyor, lütfen tekrar yazar mısınız?"
@@ -216,46 +435,36 @@ const SATIS_SORULARI_HAYAT = [
     validationError: "Girilen e-posta adresi geçerli görünmüyor, lütfen tekrar yazar mısınız?",
     skipIf: (a) => a.odeyen_farkli_mi !== "Hayır, Farklı Biri"
   },
-  // Garanti Emeklilik'in cagri merkezi musteriyi bu tarih/saat araliginda
-  // arayacak - mailin en ustunde bir cumle olarak ozetleniyor (bkz.
-  // satisTamamla'daki acilisMetni).
+  // Garanti Emeklilik'in cagri merkezi bu tarih/saat araliginda arayacak -
+  // mailin en ustunde bir cumle olarak ozetleniyor (bkz. satisTamamla'daki
+  // acilisMetni). Serbest metin yerine artik LISTEDEN SECILIYOR: bugunden
+  // baslayan 5 hafta ici gun + sabit saat araliklari (bkz. yukarida
+  // aramaTarihiSecenekleri / aramaSaatAraligiSecenekleri).
   {
     id: "arama_tarihi",
-    text: "Müşterinin hangi tarihte aranmasını istersiniz? (GG.AA.YYYY, bugün ya da sonrası olmalı)",
-    type: "text",
-    validate: aramaTarihiGecerliMi,
-    validationError:
-      "Geçmiş bir tarih için arama talep edemeyiz, lütfen bugün ya da sonraki bir tarih yazar mısınız? (GG.AA.YYYY, Örn: 21.07.2026)"
+    text: (a) => `${sigortaliUnvani(a, true)}nın hangi tarihte aranmasını istersiniz?`,
+    type: "choice",
+    options: aramaTarihiSecenekleri,
+    kisaSecenekler: aramaTarihiKisaSecenekleri
   },
   {
     id: "arama_saat_araligi",
-    text: "Hangi saat aralığında aranmasını istersiniz? (08:00-18:00 arası, Örn: 14:00-16:00 ya da 16-18)",
-    type: "text",
-    validate: saatAraligiGecerliMi,
-    normalize: saatAraligiNormallestir,
-    validationError: (userText, answers) => {
-      if (answers && answers.arama_tarihi && aramaTarihiBugunMu(answers.arama_tarihi)) {
-        const simdi = new Date();
-        const enErken = new Date(simdi.getTime() + 2 * 60 * 60 * 1000);
-        const saat = String(enErken.getHours()).padStart(2, "0");
-        const dakika = String(enErken.getMinutes()).padStart(2, "0");
-        return `Bugün için en erken ${saat}:${dakika}'dan sonrasına arama talep edilebilir (aramaya yetişmesi için en az 2 saat gerekiyor), lütfen buna göre bir saat aralığı yazar mısınız?`;
-      }
-      return "Aramalar sadece 08:00-18:00 arasında yapılabiliyor, lütfen bu aralıkta bir saat aralığı yazar mısınız? (Örn: 14:00-16:00 ya da 16-18)";
-    }
+    text: "Hangi saat aralığında aranmasını istersiniz?",
+    type: "choice",
+    options: aramaSaatAraligiSecenekleri
   },
-  // Son 5 soru: her biri tek bir belgenin FOTOĞRAFINI sırasıyla ister (PDF/
-  // döküman değil - kamera ya da galeriden seçilen bir fotoğraf her zaman
-  // WhatsApp'ın kendi "fotoğraf ekle" arayüzünden gönderilebiliyor). Her
-  // fotoğraf gönderildiğinde Claude görsel analiziyle hem netlik hem de
+  // Belge sorulari: her biri tek bir belgenin FOTOĞRAFINI sırasıyla ister
+  // (PDF/döküman değil - kamera ya da galeriden seçilen bir fotoğraf her
+  // zaman WhatsApp'ın kendi "fotoğraf ekle" arayüzünden gönderilebiliyor).
+  // Her fotoğraf gönderildiğinde Claude görsel analiziyle hem netlik hem de
   // doğru belge olup olmadığı kontrol ediliyor (bkz. belgeAnaliz.js).
   {
     id: "belge_acik_riza",
     type: "tekli_foto_belge",
-    text:
+    text: (a) =>
       "Şimdi sırasıyla birkaç belgenin fotoğrafını rica edeceğim.\n\n" +
       "📄 İlk olarak, imzalı *Açık Rıza Beyanı'nın (KVKK metni)* fotoğrafını gönderir misiniz? " +
-      "(Yukarıda gönderdiğim şablonu müşteriye yazdırıp imzalatabilirsiniz)",
+      `(Yukarıda gönderdiğim şablonu ${sigortaliUnvani(a, false)}ya yazdırıp imzalatabilirsiniz)`,
     beklenenBelge:
       "İmzalı bir Açık Rıza Beyanı / KVKK aydınlatma-rıza metni. Üzerinde yazılı metin ve belgenin altında " +
       "el yazısıyla atılmış bir imza olmalı.",
@@ -263,6 +472,8 @@ const SATIS_SORULARI_HAYAT = [
     sablonGonder: true,
     imzaGerekli: true
   },
+  // Sadece Hayat'ta isteniyor - BES Yeni İş'te ıslak imza kartı gerekmiyor
+  // (bkz. asagida SATIS_SORULARI_BES_YENI_IS filtrelemesi).
   {
     id: "belge_imza_karti",
     type: "tekli_foto_belge",
@@ -273,6 +484,8 @@ const SATIS_SORULARI_HAYAT = [
     dosyaAdi: "imza_karti.jpg",
     imzaGerekli: true
   },
+  // Sadece Hayat'ta isteniyor - BES Yeni İş'te yerleşim yeri belgesi
+  // gerekmiyor (bkz. asagida SATIS_SORULARI_BES_YENI_IS filtrelemesi).
   {
     id: "belge_yerlesim_yeri",
     type: "tekli_foto_belge",
@@ -298,13 +511,32 @@ const SATIS_SORULARI_HAYAT = [
       "Bir T.C. kimlik kartının ARKA yüzü - üzerinde seri numarası, doğum yeri/tarihi ve diğer bilgilerin " +
       "bulunduğu yüz.",
     dosyaAdi: "kimlik_arka.jpg"
+  },
+  // Sadece vefat teminati 500.000 USD'nin UZERINDEYSE isteniyor (Hayat'ta
+  // anlamli - BES'te vefat_teminati hic sorulmadigi icin bu soru BES'te
+  // otomatik atlanir, ayrica listeden cikarmaya gerek yok). Bos sablon,
+  // sablonGonder: "saglikBeyani" ile bu soruya gelindiginde otomatik gonderilir.
+  {
+    id: "belge_saglik_beyan",
+    type: "tekli_foto_belge",
+    text:
+      "📄 Vefat teminatı 500.000 USD üzerinde olduğu için ayrıca doldurulmuş ve imzalanmış " +
+      "*Sağlık Beyan Formu*'nun fotoğrafını/taramasını gönderir misiniz?",
+    beklenenBelge:
+      "Doldurulmuş ve imzalanmış bir Sağlık Beyan Formu. Üzerinde sağlık durumuna dair sorular/cevaplar ve " +
+      "altında el yazısıyla atılmış bir imza olmalı.",
+    dosyaAdi: "saglik_beyan_formu.jpg",
+    sablonGonder: "saglikBeyani",
+    imzaGerekli: true,
+    skipIf: (a) => !(tutarSayiyaCevir(a.vefat_teminati) > 500000)
   }
 ];
 
-// BES (Yeni İş) soru listesi, Hayat listesiyle birebir ayni - sadece "paket"
-// sorusu haric (BES'te paket ayrimi yok). Boylece iki liste hep senkron kalir.
+// BES (Yeni İş) soru listesi, Hayat listesiyle birebir ayni - "paket" ve
+// "vefat_teminati" (BES'te yok) haric, ayrica ıslak imza karti ve yerlesim
+// yeri belgesi de BES Yeni İş'te istenmiyor. Boylece iki liste hep senkron kalir.
 const SATIS_SORULARI_BES_YENI_IS = SATIS_SORULARI_HAYAT.filter(
-  (soru) => soru.id !== "paket" && soru.id !== "vefat_teminati"
+  (soru) => !["paket", "vefat_teminati", "belge_imza_karti", "belge_yerlesim_yeri"].includes(soru.id)
 );
 
 // Danisman listesi tum urunlerde ayni referansi paylasir (flows.js'deki
@@ -378,6 +610,11 @@ const ANA_MENU_SECENEKLERI = [
   "Doküman Merkezi",
   "Performansım"
 ];
+
+// Ana menude hicbir secenekle eslesmeyen, ama "hayır", "yok", "teşekkürler"
+// gibi bir kapanis/red ifadesi iceren kisa cevaplari yakalar (orn. "hayır yok
+// teşekkürler", "yok teşekkürler", "hayır teşekkürler", "teşekkürler").
+const KARSILAMA_KAPANIS_REGEX = /\b(hay[ıi]r|yok|te[şs]ekk[üu]r)/i;
 
 async function karsilamaGoster(from, session) {
   const danisman = danismaniBul(from);
@@ -490,6 +727,25 @@ function sonrakiGecerliIndex(sorular, answers, baslangic) {
   return idx;
 }
 
+// sonrakiGecerliIndex'in tersi - "geri al" komutu icin, gecerli sorudan
+// GERIYE dogru ilk atlanmayan (skipIf/danismandaGizle olmayan) soruyu bulur.
+// Basa kadar hicbir gecerli soru yoksa (yani ilk soruda "geri al" denirse)
+// -1 doner.
+function oncekiGecerliIndex(sorular, answers, baslangic) {
+  let idx = baslangic;
+  while (idx >= 0) {
+    const soru = sorular[idx];
+    if (soru.danismandaGizle || (soru.skipIf && soru.skipIf(answers))) {
+      idx -= 1;
+      continue;
+    }
+    break;
+  }
+  return idx;
+}
+
+const GERI_AL_REGEX = /^\s*geri\s*al\s*[!.]?\s*$/i;
+
 // "choice" tipi bir satis sorusuna gelen cevabi, o sorunun tam/kanonik
 // degerlerinden (soru.options) birine cozer. Soruda kisaSecenekler
 // tanimliysa (WhatsApp'in 20 karakter dugme sinirini asan uzun degerler
@@ -497,15 +753,26 @@ function sonrakiGecerliIndex(sorular, answers, baslangic) {
 // eslestirip, eslesen index uzerinden tam degeri (options[index]) donduruyoruz
 // - boylece dugmede kisa metin gorunse de kaydedilen/mail'e giden deger hep
 // tam metin oluyor.
-function secilenSecenegiCoz(userText, soru) {
-  if (soru.kisaSecenekler) {
-    const kisaEslesen = matchOption(userText, soru.kisaSecenekler);
+// soru.options/soru.kisaSecenekler sabit bir dizi OLABILECEGI gibi (answers)
+// alan bir FONKSIYON da olabilir (orn. arama_tarihi/arama_saat_araligi -
+// secenekler her seferinde dinamik uretiliyor). Bu yardimci ikisini de tek
+// bicimde (her zaman dizi) dondurur.
+function secenekleriCoz(secenekler, answers) {
+  if (typeof secenekler === "function") return secenekler(answers);
+  return secenekler;
+}
+
+function secilenSecenegiCoz(userText, soru, answers) {
+  const options = secenekleriCoz(soru.options, answers);
+  const kisaSecenekler = secenekleriCoz(soru.kisaSecenekler, answers);
+  if (kisaSecenekler) {
+    const kisaEslesen = matchOption(userText, kisaSecenekler);
     if (kisaEslesen) {
-      const idx = soru.kisaSecenekler.indexOf(kisaEslesen);
-      return soru.options[idx];
+      const idx = kisaSecenekler.indexOf(kisaEslesen);
+      return options[idx];
     }
   }
-  return matchOption(userText, soru.options);
+  return matchOption(userText, options);
 }
 
 // Satis kaydi (Hayat / BES Yeni İş / ileride Aktarım) tamamlanmadan once son
@@ -547,7 +814,12 @@ async function satisBaslat(from, session) {
 function satisAkisiBaslat(from, session, urunTipi, sorular) {
   session.satisUrunTipi = urunTipi; // "hayat" | "bes_yeni_is"
   session.satisSorular = sorular;
-  session.satisAnswers = {};
+  // _urunTipi, cevaplar nesnesinin icine de yaziliyor (normal bir soru
+  // cevabi degil, "_" ile basliyor) - boylece soru metni/secenek/asgari-tutar
+  // fonksiyonlari (sadece answers parametresi alan) urun tipine gore dogru
+  // metni ("sigortalı" ya da "katılımcı" vb.) uretebiliyor. eksikBilgiVarMi
+  // ve ozetSatirlari bu alani soru id'siyle eslesmedigi icin yoksayar.
+  session.satisAnswers = { _urunTipi: urunTipi };
   session.satisBelgeler = [];
   session.satisSoruIndex = sonrakiGecerliIndex(sorular, session.satisAnswers, 0);
   session.state = "DANISMAN_SATIS_SORU";
@@ -557,10 +829,15 @@ function satisAkisiBaslat(from, session, urunTipi, sorular) {
 async function satisSoruSor(from, session) {
   const soru = session.satisSorular[session.satisSoruIndex];
 
-  // Belgeler adimina ilk gelindiginde, danismanin musteriye yazdirip
-  // imzalatmasi icin Garanti'nin bos sablon formlarini once gonderiyoruz.
-  if (soru.sablonGonder) {
-    await sabitSablonlariGonder(from);
+  // Belgeler adimina ilk gelindiginde, danismanin sigortaliya/katilimciya
+  // yazdirip imzalatmasi icin Garanti'nin bos sablon formlarini once
+  // gonderiyoruz. sablonGonder === true -> acik riza + (Hayat'ta) imza karti,
+  // sablonGonder === "saglikBeyani" -> Saglik Beyan Formu (vefat teminati
+  // 500.000 USD ustunde oldugunda tetiklenen ek belge sorusu).
+  if (soru.sablonGonder === true) {
+    await sabitSablonlariGonder(from, session.satisAnswers._urunTipi);
+  } else if (soru.sablonGonder === "saglikBeyani") {
+    await saglikBeyanSablonuGonder(from);
   }
 
   const metin = typeof soru.text === "function" ? soru.text(session.satisAnswers) : soru.text;
@@ -569,7 +846,9 @@ async function satisSoruSor(from, session) {
     // kisaSecenekler varsa (bkz. odeme_araci) butonda/liste'de o gosterilir -
     // kaydedilen deger yine soru.options'taki tam metin olur (bkz. asagida
     // DANISMAN_SATIS_SORU case'indeki cozumleme).
-    const gosterilecekler = soru.kisaSecenekler || soru.options;
+    const options = secenekleriCoz(soru.options, session.satisAnswers);
+    const kisaSecenekler = secenekleriCoz(soru.kisaSecenekler, session.satisAnswers);
+    const gosterilecekler = kisaSecenekler || options;
     if (gosterilecekler.length > 3) await sendList(from, metin, "Seçin", gosterilecekler);
     else await sendButtons(from, metin, gosterilecekler);
   } else {
@@ -621,6 +900,58 @@ async function musteriyeSatisBildirimiGonder(a, urunAdiTam) {
   }
 }
 
+// satisTamamla'nin kullandigi ozet satirlarini hesaplayan SAF (yan etkisiz)
+// fonksiyon - hem test edilebilir olsun hem de satisTamamla okunabilir
+// kalsin diye ayristirildi. "answers" (a) ve "urunTipi" disinda hicbir seye
+// bagli degil, I/O yapmiyor.
+function satisOzetVerileriniHesapla(a, urunTipi) {
+  // TC vatandasi mi sorusuna gore TCK/Mavi Kart ve uyruk bilgisini cozuyoruz -
+  // "Evet" ise uyruk otomatik T.C. kabul edilir ve TCK No istenir, "Hayır"
+  // ise uyruk ayrica sorulur ve TCK No yerine Mavi Kart No istenir.
+  const tcVatandasiMi = a.sigortali_tc_vatandasi_mi === "Evet";
+  const sigortaliKimlikNo = tcVatandasiMi ? a.sigortali_tck : a.sigortali_mavi_kart_no;
+  const kimlikNoEtiketi = tcVatandasiMi ? "TCK No" : "Mavi Kart No";
+  const sigortaliUyrukDegeri = tcVatandasiMi ? "T.C." : a.sigortali_uyruk;
+  const unvan = sigortaliUnvani(a, true); // "Sigortalı" veya "Katılımcı"
+
+  const odeyenAyniMi = a.odeyen_farkli_mi !== "Hayır, Farklı Biri";
+  const odeyenAdSoyad = odeyenAyniMi ? a.musteri_ad_soyad : a.odeyen_ad_soyad;
+  const odeyenTck = odeyenAyniMi ? sigortaliKimlikNo : a.odeyen_tck;
+  const odeyenCep = odeyenAyniMi ? a.sigortali_cep : a.odeyen_cep;
+  const odeyenEposta = odeyenAyniMi ? a.sigortali_eposta : a.odeyen_eposta;
+  const urunAdiTam =
+    urunTipi === "hayat" ? `${a.paket} Prim İadeli Hayat Sigortası` : "Bireysel Emeklilik Sistemi (BES) - Yeni İş";
+
+  const ozetSatirlari = [
+    `Ürün Adı: ${urunAdiTam}`,
+    `${unvan} Ad Soyad: ${a.musteri_ad_soyad}`,
+    `${unvan} ${kimlikNoEtiketi}: ${sigortaliKimlikNo}`,
+    `${unvan} Doğum Tarihi: ${a.sigortali_dogum_tarihi}`,
+    `Cinsiyet: ${a.sigortali_cinsiyet}`,
+    `${unvan} Uyruk/Doğum Yeri: ${sigortaliUyrukDegeri} / ${a.sigortali_dogum_yeri}`,
+    `Ödeyen Ad Soyad ${kimlikNoEtiketi}: ${odeyenAdSoyad} ${odeyenTck}`,
+    `Dağıtım Kanalı Adı: EKŞİ GROUP`,
+    `Dağıtım Kanalı kodu: 329`,
+    // Poliçe süresi artik sorulmuyor - Hayat'ta her zaman 12 yil varsayiliyor.
+    ...(urunTipi === "hayat" ? [`Poliçe Süresi: 12 YIL`] : []),
+    `Ödeme Aracı: ${a.odeme_araci}`,
+    `Aylık Prim Tutarı: ${a.prim_tutari}`,
+    `Ödeme Dönemi: ${a.odeme_donemi}`,
+    // Vefat teminatini artik danisman kendisi (web sitemizden) hesaplayip
+    // giriyor - sadece Hayat'ta soruluyor, BES'te bu alan yok.
+    ...(urunTipi === "hayat" ? [`Vefat Teminatı: ${a.vefat_teminati}`] : []),
+    `Sigortalı Cep Telefonu: ${a.sigortali_cep}`,
+    `Sigortalı E-Posta: ${a.sigortali_eposta}`,
+    `Ödeyen Cep Telefonu: ${odeyenCep}`,
+    `Ödeyen E-Posta: ${odeyenEposta}`
+  ];
+
+  const unvanIyelik = urunTipi === "bes_yeni_is" ? "Katılımcımızın" : "Sigortalımızın";
+  const acilisMetni = `${unvanIyelik} ${a.arama_tarihi} tarihinde, ${a.arama_saat_araligi} saatleri arasında aranması ricadır.`;
+
+  return { urunAdiTam, ozetSatirlari, acilisMetni };
+}
+
 async function satisTamamla(from, session) {
   // Belge olmadan Garanti Emeklilik'e mail gitmesinin hicbir anlami yok -
   // normal akista buraya sadece 5 belge de kabul edildikten sonra
@@ -657,37 +988,7 @@ async function satisTamamla(from, session) {
   const a = session.satisAnswers;
   const urunTipi = session.satisUrunTipi;
 
-  const odeyenAyniMi = a.odeyen_farkli_mi !== "Hayır, Farklı Biri";
-  const odeyenAdSoyad = odeyenAyniMi ? a.musteri_ad_soyad : a.odeyen_ad_soyad;
-  const odeyenTck = odeyenAyniMi ? a.sigortali_tck : a.odeyen_tck;
-  const odeyenCep = odeyenAyniMi ? a.sigortali_cep : a.odeyen_cep;
-  const odeyenEposta = odeyenAyniMi ? a.sigortali_eposta : a.odeyen_eposta;
-  const urunAdiTam =
-    urunTipi === "hayat" ? `${a.paket} Prim İadeli Hayat Sigortası` : "Bireysel Emeklilik Sistemi (BES) - Yeni İş";
-
-  const ozetSatirlari = [
-    `Ürün Adı: ${urunAdiTam}`,
-    `Müşteri Ad Soyad: ${a.musteri_ad_soyad}`,
-    `Sigortalı TCK No: ${a.sigortali_tck}`,
-    `Sigortalı Doğum Tarihi: ${a.sigortali_dogum_tarihi}`,
-    `Cinsiyet: ${a.sigortali_cinsiyet}`,
-    `Katılımcı Uyruk/Doğum Yeri: ${a.sigortali_uyruk} / ${a.sigortali_dogum_yeri}`,
-    `Ödeyen Ad Soyad TCK No: ${odeyenAdSoyad} ${odeyenTck}`,
-    `Dağıtım Kanalı Adı: EKŞİ GROUP`,
-    `Dağıtım Kanalı kodu: 329`,
-    // Poliçe süresi artik sorulmuyor - Hayat'ta her zaman 12 yil varsayiliyor.
-    ...(urunTipi === "hayat" ? [`Poliçe Süresi: 12 YIL`] : []),
-    `Ödeme Aracı: ${a.odeme_araci}`,
-    `Aylık Prim Tutarı: ${a.prim_tutari}`,
-    `Ödeme Dönemi: ${a.odeme_donemi}`,
-    // Vefat teminatini artik danisman kendisi (web sitemizden) hesaplayip
-    // giriyor - sadece Hayat'ta soruluyor, BES'te bu alan yok.
-    ...(urunTipi === "hayat" ? [`Vefat Teminatı: ${a.vefat_teminati}`] : []),
-    `Sigortalı Cep Telefonu: ${a.sigortali_cep}`,
-    `Sigortalı E-Posta: ${a.sigortali_eposta}`,
-    `Ödeyen Cep Telefonu: ${odeyenCep}`,
-    `Ödeyen E-Posta: ${odeyenEposta}`
-  ];
+  const { urunAdiTam, ozetSatirlari, acilisMetni } = satisOzetVerileriniHesapla(a, urunTipi);
 
   // Danismanin tek tek yukledigi belgeleri (kimlik on/arka, imzali evraklar,
   // yerlesim yeri belgesi) mail'e ayri ayri ek olarak eklemek yerine tek bir
@@ -710,8 +1011,6 @@ async function satisTamamla(from, session) {
       err.message
     );
   }
-
-  const acilisMetni = `Müşterimizin ${a.arama_tarihi} tarihinde, ${a.arama_saat_araligi} saatleri arasında aranması ricadır.`;
 
   // Mail gonderim sonucunu artik BEKLIYORUZ (fire-and-forget degil) ki
   // danismana dogru bir onay mesaji gosterebilelim - eskiden mail gitse de
@@ -748,7 +1047,7 @@ async function satisTamamla(from, session) {
   if (mailSonucu && mailSonucu.basarili) {
     await sendText(
       from,
-      `Satış kaydı tamamlandı ✅ ${a.musteri_ad_soyad} için ${urunAdiTam} kaydı Garanti Emeklilik'e iletildi.`
+      `Satış kaydı tamamlandı ✅ Ellerine sağlık! 🙌 ${a.musteri_ad_soyad} için ${urunAdiTam} kaydı Garanti Emeklilik'e iletildi.`
     );
     // Mail basariyla gittiyse (yani Garanti Emeklilik musteriyi gercekten
     // arayacaksa) musteriye de bilgilendirme mesaji atalim - mail gitmediyse
@@ -899,7 +1198,7 @@ async function destekLeadSecimiGoster(from, session) {
   session.danismanDestekLeadListesi = gosterilecekler.map((l) => l.id);
 
   const satirlar = gosterilecekler.map((l) => `${l.musteriAdi || l.telefon} (${l.urun}) - ${l.durum}`);
-  await sendList(from, "Hangi talep/müşteri ile ilgili destek almak istersiniz?", "Talep Seç", satirlar);
+  await sendList(from, "Hangi talep/sigortalı ile ilgili destek almak istersiniz?", "Talep Seç", satirlar);
 }
 
 async function destekMetniIste(from, session, lead) {
@@ -923,7 +1222,7 @@ async function destekTalebiGonder(from, session, destekMetni) {
   const detay =
     `🆘 Destek Talebi\n` +
     `📌 ${danismanAdi} tarafından oluşturuldu.\n\n` +
-    `Müşteri: ${lead.musteriAdi || lead.telefon}\n` +
+    `Sigortalı: ${lead.musteriAdi || lead.telefon}\n` +
     `Ürün: ${lead.urun}\n` +
     `Telefon: ${lead.telefon}\n\n` +
     `Mesaj: ${destekMetni}`;
@@ -949,7 +1248,7 @@ async function destekTalebiGonder(from, session, destekMetni) {
 async function yenilemeBaslat(from, session) {
   session.state = "DANISMAN_YENILEME_MUSTERI_BEKLE";
   session.yenilemeVerisi = {};
-  await sendText(from, "Müşterinin adını ve soyadını paylaşır mısınız?");
+  await sendText(from, "Sigortalının adını ve soyadını paylaşır mısınız?");
 }
 
 async function yenilemeUrunSor(from, session) {
@@ -1076,7 +1375,7 @@ async function handleAdvisorMessage(from, parsed) {
           if (analiz && soru.imzaGerekli && !analiz.imzaliMi) {
             await sendText(
               from,
-              `Bu belge boş/imzasız bir şablon gibi görünüyor 🤔 ${analiz.aciklama || ""}\n\nLütfen müşteriye doldurtup imzalattığınız belgenin fotoğrafını gönderir misiniz?`
+              `Bu belge boş/imzasız bir şablon gibi görünüyor 🤔 ${analiz.aciklama || ""}\n\nLütfen ${sigortaliUnvani(session.satisAnswers, false)}ya doldurtup imzalattığınız belgenin fotoğrafını gönderir misiniz?`
             );
             return;
           }
@@ -1139,9 +1438,16 @@ async function handleAdvisorMessage(from, parsed) {
   // kalmis bir oturuma "merhaba" derse) once sicak bir karsilamayla
   // baslamasi lazim, kaldigi yerden (ilgisiz eski bir ekranla) devam etmesi
   // degil.
+  // NOT: "evet" bu listeden CIKARILDI - birden fazla soruda (orn. "Sigortalı
+  // Türkiye Cumhuriyeti vatandaşı mı?", elementer akistaki "Uzman mısınız?"
+  // gibi) gecerli bir "Evet"/"Hayır" cevap secenegi oldugu icin, bu kelime
+  // burada kalsaydi danisman soruyu normal cevapladiginda (sadece "Evet"
+  // yazarak) akis yanlislikla bastan ana menuye donuyordu - cevap hic
+  // kaydedilmiyordu. "Hayır" boyle bir catisma yaratmiyor cunku zaten bu
+  // listede hic yoktu.
   if (
     parsed.type === "text" &&
-    /^(men[uü]|iptal|geri|evet|merhaba|selam|slm|mrb|hey|hi|hello|g[uü]naydin|iyi g[uü]nler)$/i.test(userText || "")
+    /^(men[uü]|iptal|geri|merhaba|selam|slm|mrb|hey|hi|hello|g[uü]naydin|iyi g[uü]nler)$/i.test(userText || "")
   ) {
     await karsilamaGoster(from, session);
     return;
@@ -1188,6 +1494,14 @@ async function handleAdvisorMessage(from, parsed) {
       }
       if (userText === "Performansım") {
         await performansGoster(from, session);
+        return;
+      }
+      // "Senin için yapabileceğim başka bir şey var mı?" sorusuna "hayır yok
+      // teşekkürler" tarzı bir kapanış cevabi gelirse, ana menuyu tekrar
+      // basa donup gostermek yerine sicak bir kapanis cumlesiyle karsilik
+      // veriyoruz.
+      if (KARSILAMA_KAPANIS_REGEX.test(userText)) {
+        await sendText(from, "Rica ederim, her zaman buradayım 🙌 Yeni satışlarını bekliyorum!");
         return;
       }
       await karsilamaGoster(from, session);
@@ -1398,6 +1712,27 @@ async function handleAdvisorMessage(from, parsed) {
 
     case "DANISMAN_YENI_SORU": {
       const flow = flows[session.danismanYeniUrunKey];
+
+      // "geri al" - bkz. DANISMAN_SATIS_SORU'daki ayni ozellik icin yorum.
+      if (GERI_AL_REGEX.test(userText)) {
+        const oncekiIndex = oncekiGecerliIndex(
+          flow.questions,
+          session.danismanYeniAnswers,
+          session.danismanYeniSoruIndex - 1
+        );
+        if (oncekiIndex < 0) {
+          await sendText(from, "Geri alınacak bir önceki adım yok, bu ilk soru 🙂");
+          await danismanSoruSor(from, session);
+          return;
+        }
+        const oncekiSoru = flow.questions[oncekiIndex];
+        delete session.danismanYeniAnswers[oncekiSoru.id];
+        session.danismanYeniSoruIndex = oncekiIndex;
+        await sendText(from, "Tamam, bir önceki adıma dönüyorum ⏪");
+        await danismanSoruSor(from, session);
+        return;
+      }
+
       const soru = flow.questions[session.danismanYeniSoruIndex];
 
       if (soru.type === "choice") {
@@ -1442,6 +1777,32 @@ async function handleAdvisorMessage(from, parsed) {
 
     // --- Satis kaydi akisi ---
     case "DANISMAN_SATIS_SORU": {
+      // "geri al" - danisman bir onceki soruda yazdigi/sectigi cevabi
+      // duzeltmek isterse (orn. eposta yanlis yazildiysa), bir onceki
+      // gecerli (skipIf ile atlanmamis) soruya donup o soruyu tekrar sorar.
+      // Foto/belge sorularina donulurse, o adimda yuklenen belge de
+      // (satisBelgeler'den dosyaAdi'na gore) geri alinir ki tekrar
+      // yuklenebilsin.
+      if (GERI_AL_REGEX.test(userText)) {
+        const oncekiIndex = oncekiGecerliIndex(session.satisSorular, session.satisAnswers, session.satisSoruIndex - 1);
+        if (oncekiIndex < 0) {
+          await sendText(from, "Geri alınacak bir önceki adım yok, bu ilk soru 🙂");
+          await satisSoruSor(from, session);
+          return;
+        }
+        const oncekiSoru = session.satisSorular[oncekiIndex];
+        if (oncekiSoru.type === "tekli_foto_belge") {
+          const belgeIdx = session.satisBelgeler.findIndex((b) => b.dosyaAdi === oncekiSoru.dosyaAdi);
+          if (belgeIdx >= 0) session.satisBelgeler.splice(belgeIdx, 1);
+        } else {
+          delete session.satisAnswers[oncekiSoru.id];
+        }
+        session.satisSoruIndex = oncekiIndex;
+        await sendText(from, "Tamam, bir önceki adıma dönüyorum ⏪");
+        await satisSoruSor(from, session);
+        return;
+      }
+
       const soru = session.satisSorular[session.satisSoruIndex];
 
       if (soru.type === "tekli_foto_belge") {
@@ -1451,10 +1812,12 @@ async function handleAdvisorMessage(from, parsed) {
       }
 
       if (soru.type === "choice") {
-        const secilen = secilenSecenegiCoz(userText, soru);
+        const secilen = secilenSecenegiCoz(userText, soru, session.satisAnswers);
         if (!secilen) {
           const metin = typeof soru.text === "function" ? soru.text(session.satisAnswers) : soru.text;
-          const gosterilecekler = soru.kisaSecenekler || soru.options;
+          const kisaSecenekler = secenekleriCoz(soru.kisaSecenekler, session.satisAnswers);
+          const options = secenekleriCoz(soru.options, session.satisAnswers);
+          const gosterilecekler = kisaSecenekler || options;
           if (gosterilecekler.length > 3) await sendList(from, metin, "Seçin", gosterilecekler);
           else await sendButtons(from, metin, gosterilecekler);
           return;
@@ -1514,7 +1877,7 @@ async function handleAdvisorMessage(from, parsed) {
     // --- Yenileme ekleme akisi ---
     case "DANISMAN_YENILEME_MUSTERI_BEKLE": {
       if (!userText) {
-        await sendText(from, "Müşterinin adını ve soyadını paylaşır mısınız?");
+        await sendText(from, "Sigortalının adını ve soyadını paylaşır mısınız?");
         return;
       }
       session.yenilemeVerisi.musteriAdi = userText;

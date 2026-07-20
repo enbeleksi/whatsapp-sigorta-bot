@@ -15,17 +15,47 @@ function tcKimlikGecerliMi(value) {
   return digit10 === digits[9] && digit11 === digits[10];
 }
 
-// GG.AA.YYYY formatinda, gercekci bir tarih mi kontrol eder.
-function tarihGecerliMi(value) {
-  const match = (value || "").trim().match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
-  if (!match) return false;
+// Esnek bir GG.AA.YYYY tarih metnini { gun, ay, yil } seklinde ayristirir -
+// gun/ay tek ya da cift haneli olabilir (2.5.1999 ya da 02.05.1999), yil 2 ya
+// da 4 haneli olabilir (2.5.99 de kabul edilir). 2 haneli yil icin makul bir
+// "pivot" kullanilir: dogum tarihi gecmiste olmak ZORUNDA oldugu icin, YY+2000
+// bu yildan buyukse (yani gelecekte kalirsa) 19YY, degilse 20YY olarak
+// yorumlanir (orn. bu yil 2026 ise: "99" -> 1999, "05" -> 2005).
+// Ayristirilamiyorsa null doner.
+function tarihiAyristir(value) {
+  const match = (value || "").trim().match(/^(\d{1,2})\.(\d{1,2})\.(\d{2}|\d{4})$/);
+  if (!match) return null;
   const gun = Number(match[1]);
   const ay = Number(match[2]);
-  const yil = Number(match[3]);
+  let yil = Number(match[3]);
+  if (match[3].length === 2) {
+    const buYilIkiHane = new Date().getFullYear() % 100;
+    yil = yil <= buYilIkiHane ? 2000 + yil : 1900 + yil;
+  }
+  return { gun, ay, yil };
+}
+
+// Esnek formatta (bkz. tarihiAyristir) girilen bir tarihin gercekci olup
+// olmadigini kontrol eder (orn. 31.02.YYYY gibi olmayan bir tarihi reddeder).
+function tarihGecerliMi(value) {
+  const ayristirilan = tarihiAyristir(value);
+  if (!ayristirilan) return false;
+  const { gun, ay, yil } = ayristirilan;
   if (yil < 1900 || yil > new Date().getFullYear()) return false;
   if (ay < 1 || ay > 12) return false;
   const ayinGunSayisi = new Date(yil, ay, 0).getDate();
   return gun >= 1 && gun <= ayinGunSayisi;
+}
+
+// tarihGecerliMi ile onaylanmis (gecerli) bir tarih metnini, gorunumden
+// bagimsiz olarak her zaman kanonik "GG.AA.YYYY" formatina cevirir - "2.5.99"
+// da yazsa "02.05.1999" da yazsa, kaydedilen/maile giden deger hep ayni temiz
+// formatta olsun diye (bkz. saatAraligiNormallestir ile ayni yaklasim).
+function tarihiNormallestir(value) {
+  const ayristirilan = tarihiAyristir(value);
+  if (!ayristirilan) return value;
+  const ikiHane = (n) => String(n).padStart(2, "0");
+  return `${ikiHane(ayristirilan.gun)}.${ikiHane(ayristirilan.ay)}.${ayristirilan.yil}`;
 }
 
 // Basit bir yas kontrolu (1-120 arasi tam sayi).
@@ -256,6 +286,7 @@ function saatAraligiNormallestir(value) {
 module.exports = {
   tcKimlikGecerliMi,
   tarihGecerliMi,
+  tarihiNormallestir,
   yasGecerliMi,
   pozitifSayiMi,
   yilGecerliMi,

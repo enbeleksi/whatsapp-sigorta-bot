@@ -6,7 +6,7 @@ const multer = require("multer");
 const { handleIncoming, hatirlatmaGonder, sablonParametresiIcinTemizle } = require("./conversationEngine");
 const advisorEngine = require("./advisorEngine");
 const { sendText, sendDocument, sendTemplate, sendAuthTemplate } = require("./loggedWhatsapp");
-const { sablonOlustur, sablonDetayGetir } = require("./whatsapp");
+const { sablonOlustur, sablonDetayGetir, sablonDuzenle } = require("./whatsapp");
 const messageLog = require("./messageLog");
 const leadStore = require("./leadStore");
 const yenilemeStore = require("./yenilemeStore");
@@ -474,6 +474,56 @@ app.get("/api/panel/musteri-bilgilendirme-sablonu-olustur", panelAuth, async (re
     );
   } catch (err) {
     console.error("Musteri bilgilendirme sablonu olusturma hatasi:", err?.response?.data || err.message);
+    res.status(500).send(
+      `<pre style="font-family:monospace; padding:20px; color:#c00;">❌ Hata:\n\n${JSON.stringify(err?.response?.data || err.message, null, 2)}</pre>`
+    );
+  }
+});
+
+// --- Bir kerelik guncelleme: onaylanmis musteri_basvuru_bilgilendirme_v5
+// sablonunun BODY metnini daha kurumsal bir dile ve birkac (promosyon
+// sayilmayacak, sadece bilgilendirici) emojiye guncellemek icin. Sablonu
+// SILIP YENIDEN OLUSTURMAK yerine mevcut (onceden onaylanmis) sablonu
+// DUZENLIYORUZ (bkz. whatsapp.js sablonDuzenle) - boylece
+// MUSTERI_BASVURU_TEMPLATE_NAME degismiyor, Railway'de yeniden ayarlamaya
+// gerek kalmiyor. Meta duzenleme sonrasi sablonu tekrar incelemeye
+// (PENDING) alabilir - onay durumu WhatsApp Manager > Message Templates'ten
+// takip edilebilir. templateId, WhatsApp Manager'daki sablonun ID'sidir
+// (sablon-detay endpoint'i de bu ID'yi doner). Kullanildiktan sonra bu route
+// silinebilir.
+app.get("/api/panel/musteri-bilgilendirme-sablonu-guncelle/:id", panelAuth, async (req, res) => {
+  try {
+    const sonuc = await sablonDuzenle(req.params.id, {
+      components: [
+        {
+          type: "BODY",
+          // NOT: UTILITY kategorisinde kalabilmek icin metin hala tamamen
+          // islemsel/durum bildirimi niteliginde - "teşekkür ederiz",
+          // "tebrik ederiz" gibi hicbir ovucu/pazarlama ifadesi
+          // KULLANILMADI (bkz. yukaridaki olusturma route'undaki notlar,
+          // bu kural v1'de REJECTED almamiza sebep olmustu). Sadece dili
+          // daha kurumsal ("Sayın", "tarafımıza ulaşmıştır" gibi) hale
+          // getirdik, gelecek aramayi yanitlamanin onemini vurguladik ve
+          // sadece bilgilendirici (📋 belge/basvuru, 📞 telefon) iki emoji
+          // ekledik - degisken formati (pozisyonel {{1}}-{{4}}) ve sirasi
+          // AYNEN korundu.
+          text:
+            "Sayın {{1}}, 📋 {{2}} başvurunuz tarafımıza ulaşmıştır. " +
+            "İşlemlerinizin tamamlanabilmesi için Garanti Emeklilik Genel Müdürlüğü tarafından aranacaksınız. 📞 " +
+            "Planlanan arama tarihi {{3}}, saat aralığı ise {{4}} olarak belirlenmiştir. " +
+            "Sürecinizin sorunsuz ilerleyebilmesi için bu aramayı yanıtlamanız önem arz etmektedir. " +
+            "Arama 444 03 36 ya da 0212 334 ile başlayan bir numaradan gerçekleştirilecektir.",
+          example: {
+            body_text: [["Ahmet Yılmaz", "Premium Prim İadeli Hayat Sigortası", "21.07.2026", "14:00-16:00"]]
+          }
+        }
+      ]
+    });
+    res.send(
+      `<pre style="font-family:monospace; padding:20px;">✅ Şablon güncelleme isteği gönderildi.\n\n${JSON.stringify(sonuc.data, null, 2)}</pre>`
+    );
+  } catch (err) {
+    console.error("Musteri bilgilendirme sablonu guncelleme hatasi:", err?.response?.data || err.message);
     res.status(500).send(
       `<pre style="font-family:monospace; padding:20px; color:#c00;">❌ Hata:\n\n${JSON.stringify(err?.response?.data || err.message, null, 2)}</pre>`
     );

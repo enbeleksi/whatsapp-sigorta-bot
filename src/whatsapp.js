@@ -260,6 +260,19 @@ async function sablonDetayGetir(templateId) {
   });
 }
 
+// Onceden olusturulmus (onaylanmis/beklemede) bir sablonu DUZENLER - yeni bir
+// sablon olusturmak yerine mevcut sablonun icerigini (orn. sadece BODY
+// component'ini) gunceller. Meta, onaylanmis sablonlarin belirli bir siklikta
+// (30 gunde ~10 kez, 24 saatte 1 kez) duzenlenmesine izin veriyor; duzenleme
+// sonrasi sablon tekrar Meta incelemesine (PENDING) dusebilir. veri, PATCH
+// edilecek alanlari icerir (orn. { components: [...] } - name/language
+// degistirilemez, bu ikisi sabit kalir).
+async function sablonDuzenle(templateId, veri) {
+  return axios.post(`https://graph.facebook.com/${API_VERSION}/${templateId}`, veri, {
+    headers: headers()
+  });
+}
+
 module.exports = {
   sendText,
   sendButtons,
@@ -271,5 +284,6 @@ module.exports = {
   sendAuthTemplate,
   mediaIndir,
   sablonOlustur,
-  sablonDetayGetir
+  sablonDetayGetir,
+  sablonDuzenle
 };
