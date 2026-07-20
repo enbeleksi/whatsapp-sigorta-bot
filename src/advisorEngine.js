@@ -661,7 +661,23 @@ function matchOption(userText, options) {
 
 // GG.AA.YYYY SS:DD formatinda bir tarih-saat metnini gecerliyse zaman
 // damgasina (ms) cevirir, degilse null doner.
+//
+// ONEMLI (20.07.2026 tarihli hatirlatma gecikmesi/kaybi vakasi): bu fonksiyon
+// eskiden "new Date(yil, ay-1, gun, saat, dakika)" kullaniyordu - bu, girilen
+// saati SUNUCUNUN calistigi process'in yerel saat dilimine gore yorumluyordu.
+// Railway'deki (ve genel olarak konfigure edilmemis Node) container'lar
+// varsayilan olarak UTC calisir, TZ ortam degiskeni tanimli degilse Turkiye
+// saatiyle (UTC+3) hicbir ilgisi olmuyor. Sonuc: bir danisman "14:00" yazip
+// Turkiye saatiyle 14:00'u kastettiginde, sunucu bunu 14:00 UTC olarak
+// kaydediyordu - yani gercekte Turkiye saatiyle 17:00'da (3 saat GEC)
+// tetikleniyordu. Bunu, sunucunun yerel saat dilimine HIC BAGIMLI OLMAYAN bir
+// hesaplamayla duzeltiyoruz: Turkiye 2016'dan beri yaz saati uygulamiyor,
+// HER ZAMAN sabit UTC+3 - o yuzden Date.UTC (her zaman UTC'yi varsayan, sunucu
+// saat dilimine gore DEGISMEYEN bir fonksiyon) ile hesaplayip TURKIYE_UTC_FARKI_MS
+// kadar geriye kaydırmak, sunucu nerede/hangi saat diliminde calisirsa
+// calissin HER ZAMAN dogru sonucu verir.
 const TARIH_SAAT_REGEX = /^(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2})$/;
+const TURKIYE_UTC_FARKI_MS = 3 * 60 * 60 * 1000; // Turkiye = UTC+3 (sabit, yaz saati yok)
 
 function tarihSaatDogrula(metin) {
   const eslesme = TARIH_SAAT_REGEX.exec((metin || "").trim());
@@ -671,14 +687,33 @@ function tarihSaatDogrula(metin) {
   const yil = parseInt(eslesme[3], 10);
   const saat = parseInt(eslesme[4], 10);
   const dakika = parseInt(eslesme[5], 10);
-  const tarih = new Date(yil, ay - 1, gun, saat, dakika);
+  // Once, girilen degerlerin GERCEK bir tarihe karsilik gelip gelmedigini
+  // (orn. 31.02.YYYY gibi olmayan bir tarihi reddetmek icin) UTC bazli
+  // (sunucu saat dilimine bagli olmayan) bir round-trip ile kontrol ediyoruz.
+  const sanki_UTC = Date.UTC(yil, ay - 1, gun, saat, dakika);
+  const kontrol = new Date(sanki_UTC);
   const gecerliMi =
-    tarih.getFullYear() === yil &&
-    tarih.getMonth() === ay - 1 &&
-    tarih.getDate() === gun &&
-    tarih.getHours() === saat &&
-    tarih.getMinutes() === dakika;
-  return gecerliMi ? tarih.getTime() : null;
+    kontrol.getUTCFullYear() === yil &&
+    kontrol.getUTCMonth() === ay - 1 &&
+    kontrol.getUTCDate() === gun &&
+    kontrol.getUTCHours() === saat &&
+    kontrol.getUTCMinutes() === dakika;
+  if (!gecerliMi) return null;
+  // Girilen saat Turkiye yerel saatidir - gercek UTC zaman damgasini elde
+  // etmek icin 3 saat GERIYE aliyoruz (Turkiye = UTC + 3).
+  return sanki_UTC - TURKIYE_UTC_FARKI_MS;
+}
+
+// Bir Unix ms zaman damgasini, SUNUCUNUN calistigi saat dilimi ne olursa
+// olsun HER ZAMAN Turkiye yerel saatiyle bicimlendirir ("tr-TR" locale'i
+// SADECE sayi/ay adi formatini belirler, saat dilimini DEGIL - saat dilimini
+// ayrica "timeZone: 'Europe/Istanbul'" ile sabitlemek gerekiyor, aksi halde
+// sunucu UTC'de calisiyorsa gosterilen saat 3 saat GERIDE gorunur). Ayni
+// hatirlatma-gecikmesi vakasinin (bkz. tarihSaatDogrula yorumu) bir baska
+// yuzu - bu duzeltme olmadan, dogru hesaplanan bir hatirlatma zamani bile
+// danismana YANLIS saatte goruntuleniyor olabilirdi.
+function turkiyeSaatiniFormatla(ms, secenekler) {
+  return new Date(ms).toLocaleString("tr-TR", { timeZone: "Europe/Istanbul", ...(secenekler || {}) });
 }
 
 // --- Karsilama (ana giris noktasi) ---
@@ -774,9 +809,9 @@ async function leadDetayGoster(from, session, lead) {
     ? "\n\n📝 Notlar:\n" + lead.notlar.map((n) => `- ${n.metin}`).join("\n")
     : "";
   const hatirlatmaMetni = lead.hatirlatma
-    ? `\n\n⏰ Hatırlatma: ${new Date(lead.hatirlatma.zaman).toLocaleString("tr-TR")}${
+    ? `\n\n⏰ Hatırlatma: ${turkiyeSaatiniFormatla(lead.hatirlatma.zaman)}${
         lead.hatirlatma.not ? " - " + lead.hatirlatma.not : ""
-      }`
+      }${lead.hatirlatma.basarisiz ? "\n⚠️ Bu hatırlatma WhatsApp üzerinden gönderilemedi, müşteriyi elle kontrol edin." : ""}`
     : "";
 
   const detay =
@@ -1548,7 +1583,7 @@ async function yenilemeTamamla(from, session) {
     bitisTarihi: v.bitisTarihiMs
   });
 
-  const tarihMetni = new Date(kayit.bitisTarihi).toLocaleDateString("tr-TR");
+  const tarihMetni = turkiyeSaatiniFormatla(kayit.bitisTarihi, { year: "numeric", month: "2-digit", day: "2-digit" });
   await sendText(
     from,
     `Yenileme kaydı eklendi ✅ ${v.musteriAdi} - ${v.urunLabel}${v.plaka ? ` (${v.plaka})` : ""} - ${tarihMetni}\n\nBu tarih yaklaşınca "Yaklaşan Yenilemeler" menüsünden takip edebilirsiniz.`
@@ -1569,7 +1604,7 @@ async function yenilemelerimGoster(from, session) {
   const simdi = Date.now();
   const satirlar = yaklasanlar.map((y) => {
     const ikon = y.bitisTarihi < simdi ? "🔴" : "🟡";
-    const tarihMetni = new Date(y.bitisTarihi).toLocaleDateString("tr-TR");
+    const tarihMetni = turkiyeSaatiniFormatla(y.bitisTarihi, { year: "numeric", month: "2-digit", day: "2-digit" });
     const plakaMetni = y.plaka ? ` (${y.plaka})` : "";
     return `${ikon} ${y.musteriAdi} - ${y.urun}${plakaMetni} - ${tarihMetni}`;
   });

@@ -289,7 +289,7 @@ function kompaktDetayOlustur(flow, session, telefon) {
 //    3 degiskenli eski sablon) varsa onu dener - sadece temel bilgiyi iletir.
 // 3) Ayrica (yalnizca 1. adim basarisiz olduysa) detayli metni normal metin
 //    olarak da gondermeyi dener - pencere acik ise ekstra bir kopya daha ulasir.
-async function bildirimGonder(numara, urunAdi, musteriAdi, telefon, detayliMetin, kompaktDetay) {
+async function bildirimGonder(numara, urunAdi, musteriAdi, telefon, detayliMetin, kompaktDetay, danismanAdi) {
   const detayliSablonAdi = process.env.AGENT_DETAY_TEMPLATE_NAME;
   const kisaSablonAdi = process.env.AGENT_TEMPLATE_NAME;
 
@@ -306,8 +306,9 @@ async function bildirimGonder(numara, urunAdi, musteriAdi, telefon, detayliMetin
     const kisaOzet =
       `🔔 Yeni bir ${urunAdi} talebi geldi.\n\n` +
       `Müşteri: ${musteriAdi}\n` +
-      `Telefon: ${telefon}\n\n` +
-      `Detaylı bilgileri panelden görüntüleyebilirsiniz.`;
+      `Telefon: ${telefon}\n` +
+      (danismanAdi ? `Danışman: ${danismanAdi}\n` : "") +
+      `\nDetaylı bilgileri panelden görüntüleyebilirsiniz.`;
     try {
       await sendTemplate(
         numara,
@@ -844,17 +845,26 @@ async function finishFlow(from, session) {
 
   // Acenteye/ekibe otomatik ilet.
   const agentNumber = resolveAgentNumber(flow, session);
+  // Musteri daha once bir danismanla gorustugunu ve ismini belirttiyse
+  // (danisman_gorustu_mu === "Evet"), bu ismi bildirim mesajinda ACIKCA
+  // gosteriyoruz - eskiden bu bilgi sadece uzun ozet satirlari arasinda
+  // (soru cumlesiyle birlikte) kayboluyordu, bildirimi alan Enbel/Bahadır
+  // hangi danismanin ilgili oldugunu tek bakista goremiyordu.
+  const belirtilenDanismanAdi =
+    session.answers.danisman_gorustu_mu === "Evet" ? session.answers.danisman_adi || null : null;
   const agentMessage =
     `\u{1F4CB} Yeni iş talebi geldi\n` +
     `Müşteri: ${session.name}\n` +
     `Telefon: ${from}\n` +
-    `Ürün: ${flow.label}\n\n` +
+    `Ürün: ${flow.label}\n` +
+    (belirtilenDanismanAdi ? `Danışman: ${belirtilenDanismanAdi}\n` : "") +
+    `\n` +
     summaryLines.join("\n");
   const kompaktDetay = kompaktDetayOlustur(flow, session, from);
   const bildirilecekNumaralar = guvenlikAgiNumaralari(flow, agentNumber);
 
   for (const numara of bildirilecekNumaralar) {
-    await bildirimGonder(numara, flow.label, session.name, from, agentMessage, kompaktDetay);
+    await bildirimGonder(numara, flow.label, session.name, from, agentMessage, kompaktDetay, belirtilenDanismanAdi);
   }
 
   // Talebi takip sistemine kaydet - danisman panelden durumunu
@@ -925,6 +935,17 @@ function sablonParametresiIcinTemizle(metin) {
 // Panelden kurulan bir hatirlatmanin zamani geldiginde danismana gonderilir.
 // AGENT_DETAY_TEMPLATE_NAME ayarliysa onu kullanir (24 saat penceresine tabi
 // degil, her zaman ulasir); yoksa duz metin dener (pencere acik olmasi gerekir).
+// ONEMLI (20.07.2026 tarihli hatirlatma kaybi vakasi): bu fonksiyon eskiden
+// HER IKI deneme (sablon + duz metin) basarisiz olsa BILE hatasiz (undefined)
+// donuyordu - cagiran taraf (server.js -> hatirlatmalariKontrolEt) bu yuzden
+// basarisiz bir gonderimi de "basarili" saniyor, hatirlatmayi "gonderildi"
+// olarak isaretleyip BIR DAHA ASLA denemiyordu. Ozellikle AGENT_DETAY_TEMPLATE_NAME/
+// AGENT_TEMPLATE_NAME tanimli degilse (bkz. .env.example - ikisi de varsayilan
+// bos) tek secenek duz metin (sendText) oluyor, o da WhatsApp'in 24 saatlik
+// musteri penceresi kapaliysa basarisiz oluyor - ve bu basarisizlik hicbir
+// yere yansimiyordu. Artik HER IKI deneme de basarisiz olursa hatayi
+// YUKARI FIRLATIYORUZ ki cagiran taraf hatirlatmayi "gonderildi" olarak
+// ISARETLEMESIN, bir sonraki dakika tekrar denesin (bkz. server.js).
 async function hatirlatmaGonder(numara, metin) {
   const detayliSablonAdi = process.env.AGENT_DETAY_TEMPLATE_NAME;
   if (detayliSablonAdi) {
@@ -932,14 +953,10 @@ async function hatirlatmaGonder(numara, metin) {
       await sendTemplate(numara, detayliSablonAdi, "tr", { detay: sablonParametresiIcinTemizle(metin) }, metin);
       return;
     } catch (err) {
-      console.error("Hatırlatma şablonu gönderilemedi:", err?.response?.data || err.message);
+      console.error("Hatırlatma şablonu gönderilemedi, düz metin deneniyor:", err?.response?.data || err.message);
     }
   }
-  try {
-    await sendText(numara, metin);
-  } catch (err) {
-    console.error("Hatırlatma mesajı gönderilemedi:", err?.response?.data || err.message);
-  }
+  await sendText(numara, metin); // basarisiz olursa hata cagirana ULASIR (yukaridaki NOT'a bakin)
 }
 
 module.exports = {

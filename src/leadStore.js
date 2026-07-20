@@ -89,10 +89,13 @@ function belgeEkle(id, { dosyaAdi, mimeType, veriBase64 }) {
 }
 
 // zamanMs: hatirlatmanin gonderilecegi kesin zaman (Unix ms cinsinden).
+// denemeSayisi/basarisiz alanlari, gonderim basarisiz oldugunda sessizce
+// kaybolmamasi icin server.js'deki hatirlatmalariKontrolEt tarafindan
+// kullanilir (bkz. asagidaki hatirlatmaDenemeBasarisiz).
 function hatirlatmaKur(id, zamanMs, not) {
   const lead = leads.get(id);
   if (!lead || !zamanMs) return null;
-  lead.hatirlatma = { zaman: zamanMs, not: not || "", gonderildi: false };
+  lead.hatirlatma = { zaman: zamanMs, not: not || "", gonderildi: false, basarisiz: false, denemeSayisi: 0 };
   lead.guncellenmeZamani = Date.now();
   return lead;
 }
@@ -109,6 +112,23 @@ function hatirlatmaGonderildiIsaretle(id) {
   const lead = leads.get(id);
   if (!lead || !lead.hatirlatma) return;
   lead.hatirlatma.gonderildi = true;
+}
+
+// Bir hatirlatma gonderim denemesi basarisiz oldugunda cagirilir - "gonderildi"
+// ISARETLENMEZ ki bir sonraki kontrol dongusunde (server.js, her 60 saniyede
+// bir) TEKRAR denensin. denemeSayisi belirli bir esigi (bkz. server.js
+// HATIRLATMA_MAX_DENEME) asarsa, cagiran taraf artik pes edip hatirlatmayi
+// "gonderildi: true, basarisiz: true" olarak isaretler - boylece sonsuza kadar
+// sessizce tekrar tekrar denenmez, ama panelde/WhatsApp'ta "basarisiz oldu,
+// bu musteriyi elle kontrol edin" olarak gorunur kalir (asla sessizce kaybolmaz).
+function hatirlatmaDenemeBasarisiz(id, pesGecMi) {
+  const lead = leads.get(id);
+  if (!lead || !lead.hatirlatma) return;
+  lead.hatirlatma.denemeSayisi = (lead.hatirlatma.denemeSayisi || 0) + 1;
+  if (pesGecMi) {
+    lead.hatirlatma.gonderildi = true;
+    lead.hatirlatma.basarisiz = true;
+  }
 }
 
 // Bir danismanin kendi performans ozetini cikartir (WhatsApp'tan "Performansım"
@@ -165,6 +185,7 @@ module.exports = {
   hatirlatmaKur,
   zamaniGelenHatirlatmalar,
   hatirlatmaGonderildiIsaretle,
+  hatirlatmaDenemeBasarisiz,
   danismanIstatistikleri,
   yukle,
   kaydet

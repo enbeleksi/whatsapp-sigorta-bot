@@ -420,8 +420,11 @@ async function renderLeadsView() {
           `<a href="data:${b.mimeType};base64,${b.veriBase64}" download="${escapeHtml(b.dosyaAdi)}" style="color:#1668A1;">${escapeHtml(b.dosyaAdi)}</a> <span style="color:#999;">(${formatTarih(b.yuklenmeZamani)})</span>`
         ).join('<br/>') + '</div>'
       : '';
+    const hatirlatmaDurumMetni = lead.hatirlatma && lead.hatirlatma.basarisiz
+      ? '(⚠️ GÖNDERİLEMEDİ - müşteriyi elle kontrol edin)'
+      : (lead.hatirlatma && lead.hatirlatma.gonderildi ? '(gönderildi)' : '(bekliyor)');
     const hatirlatmaHtml = lead.hatirlatma
-      ? `<div class="hatirlatmaBilgi">⏰ Hatırlatma kuruldu: ${formatTarih(lead.hatirlatma.zaman)}${lead.hatirlatma.not ? ' - ' + escapeHtml(lead.hatirlatma.not) : ''} ${lead.hatirlatma.gonderildi ? '(gönderildi)' : '(bekliyor)'}</div>`
+      ? `<div class="hatirlatmaBilgi">⏰ Hatırlatma kuruldu: ${formatTarih(lead.hatirlatma.zaman)}${lead.hatirlatma.not ? ' - ' + escapeHtml(lead.hatirlatma.not) : ''} ${hatirlatmaDurumMetni}</div>`
       : '';
     const durumSecenekleri = durumlar.map(d => `<option value="${escapeHtml(d)}" ${d === lead.durum ? 'selected' : ''}>${escapeHtml(d)}</option>`).join('');
 

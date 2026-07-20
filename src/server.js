@@ -659,11 +659,34 @@ app.post("/api/panel/leads/:id/not", panelAuth, (req, res) => {
   res.json({ ok: true, lead });
 });
 
-// Panelden bir hatirlatma kurar. zaman: ISO tarih-saat string'i (orn. "2026-07-16T09:00").
+// "YYYY-MM-DDTHH:mm" (HTML <input type="datetime-local"> ciktisi) formatindaki
+// bir metni, TURKIYE YEREL SAATI olarak yorumlayip dogru UTC ms zaman damgasina
+// cevirir. "new Date(zamanString)" KULLANMIYORUZ - saat dilimi bilgisi
+// icermeyen bir "YYYY-MM-DDTHH:mm" metnini Node, CALISAN SUNUCUNUN yerel saat
+// dilimine gore yorumluyor (Railway'de bu genelde UTC, panelin kullanildigi
+// Turkiye'den 3 saat farkli) - bu yuzden panelden "14:00" secilse bile
+// hatirlatma gercekte 17:00'da (Turkiye saatiyle) tetikleniyordu. Asagidaki
+// yaklasim (advisorEngine.js'teki tarihSaatDogrula ile AYNI mantik: Date.UTC +
+// sabit 3 saatlik Turkiye farki) sunucunun hangi saat diliminde calistigindan
+// tamamen bagimsizdir - bkz. 20.07.2026 tarihli hatirlatma gecikmesi vakasi.
+const PANEL_TARIH_SAAT_REGEX = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/;
+const TURKIYE_UTC_FARKI_MS = 3 * 60 * 60 * 1000;
+
+function turkiyeYerelSaatindenUtcMsHesapla(zamanString) {
+  const eslesme = PANEL_TARIH_SAAT_REGEX.exec((zamanString || "").trim());
+  if (!eslesme) return NaN;
+  const [, yil, ay, gun, saat, dakika] = eslesme.map(Number);
+  const sankiUtc = Date.UTC(yil, ay - 1, gun, saat, dakika);
+  return sankiUtc - TURKIYE_UTC_FARKI_MS;
+}
+
+// Panelden bir hatirlatma kurar. zaman: <input type="datetime-local"> ciktisi
+// (orn. "2026-07-16T09:00") - panel Turkiye'den kullanildigi icin bu deger
+// HER ZAMAN Turkiye yerel saati olarak yorumlanir (bkz. yukaridaki yorum).
 app.post("/api/panel/leads/:id/hatirlatma", panelAuth, (req, res) => {
   const { zaman, not } = req.body;
   if (!zaman) return res.status(400).json({ error: "zaman gerekli" });
-  const zamanMs = new Date(zaman).getTime();
+  const zamanMs = turkiyeYerelSaatindenUtcMsHesapla(zaman);
   if (Number.isNaN(zamanMs)) return res.status(400).json({ error: "Gecersiz tarih/saat" });
   const lead = leadStore.hatirlatmaKur(req.params.id, zamanMs, not);
   if (!lead) return res.status(404).json({ error: "Talep bulunamadi" });
@@ -856,7 +879,23 @@ const PORT = process.env.PORT || 3000;
 // Her dakika, zamani gelmis (ve henuz gonderilmemis) hatirlatmalari kontrol
 // edip ilgili danismana WhatsApp mesaji olarak gonderir.
 const HATIRLATMA_KONTROL_SIKLIGI_MS = 60 * 1000;
+// Gonderim basarisiz olursa (orn. WhatsApp'in 24 saatlik musteri penceresi
+// kapaliysa) her dakika tekrar deneriz - ama sonsuza kadar degil. 30 deneme
+// (~30 dakika, zamani gectikten sonra) sonunda pes edip "basarisiz" olarak
+// isaretleriz (bkz. leadStore.hatirlatmaDenemeBasarisiz) - boylece hem
+// gereksiz sonsuz log/istek dongusune girilmez, hem de hatirlatma SESSIZCE
+// kaybolmaz (panelde/lead kaydinda basarisiz oldugu goruntlenebilir kalir).
+const HATIRLATMA_MAX_DENEME = 30;
 
+// ONEMLI (20.07.2026 tarihli hatirlatma kaybi vakasi): eskiden bu fonksiyon
+// hatirlatmaGonder basarisiz olsa BILE (finally blogu icinde, kosulsuzca)
+// hatirlatmayi "gonderildi" olarak isaretliyordu - yani WhatsApp mesaji hic
+// ulasmasa da sistem bunu "gonderildi" saniyor, BIR DAHA HIC denemiyor ve
+// hatirlatma sessizce kayboluyordu (sunucu logu disinda hicbir yerde iz
+// birakmadan). Artik: basarili olursa "gonderildi" isaretlenir; basarisiz
+// olursa (HATIRLATMA_MAX_DENEME'ye kadar) ISARETLENMEZ ki bir sonraki
+// dakika TEKRAR denensin; esik asilirsa pes edilip acikca "basarisiz"
+// olarak isaretlenir (bkz. leadStore.hatirlatmaDenemeBasarisiz).
 async function hatirlatmalariKontrolEt() {
   const zamaniGelenler = leadStore.zamaniGelenHatirlatmalar();
   for (const lead of zamaniGelenler) {
@@ -873,10 +912,17 @@ async function hatirlatmalariKontrolEt() {
     try {
       await hatirlatmaGonder(lead.danismanNumarasi, mesaj);
       console.log("Hatirlatma gonderildi:", lead.id, lead.danismanNumarasi);
-    } catch (err) {
-      console.error("Hatirlatma gonderilirken hata:", err?.response?.data || err.message);
-    } finally {
       leadStore.hatirlatmaGonderildiIsaretle(lead.id);
+    } catch (err) {
+      const guncelDenemeSayisi = (lead.hatirlatma.denemeSayisi || 0) + 1;
+      const pesGecMi = guncelDenemeSayisi >= HATIRLATMA_MAX_DENEME;
+      console.error(
+        `Hatirlatma gonderilemedi (deneme ${guncelDenemeSayisi}/${HATIRLATMA_MAX_DENEME}, lead ${lead.id}, ${lead.danismanNumarasi})${
+          pesGecMi ? " - PES EDILDI, bir daha denenmeyecek" : " - bir dakika sonra tekrar denenecek"
+        }:`,
+        err?.response?.data || err.message
+      );
+      leadStore.hatirlatmaDenemeBasarisiz(lead.id, pesGecMi);
     }
   }
 }
