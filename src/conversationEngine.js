@@ -845,7 +845,7 @@ async function finishFlow(from, session) {
   // Acenteye/ekibe otomatik ilet.
   const agentNumber = resolveAgentNumber(flow, session);
   const agentMessage =
-    `\u{1F4CB} Yeni sigorta teklif talebi\n` +
+    `\u{1F4CB} Yeni iş talebi geldi\n` +
     `Müşteri: ${session.name}\n` +
     `Telefon: ${from}\n` +
     `Ürün: ${flow.label}\n\n` +

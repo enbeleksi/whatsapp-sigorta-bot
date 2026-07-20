@@ -37,6 +37,7 @@ const flows = require("./flows");
 const conversationEngine = require("./conversationEngine");
 const { belgeleriTekPdfeBirlestir } = require("./pdfBirlestir");
 const { belgeFotografiAnalizEt } = require("./belgeAnaliz");
+const { vefatTeminatiHesapla } = require("./vefatTeminatiHesapla");
 
 // Elinde "Trafik Sigortası" ya da "Kasko Sigortası" gecen urun etiketleri
 // icin, yenileme eklerken ayrica plaka soruyoruz (diger urunlerde anlamsiz).
@@ -313,7 +314,15 @@ const SATIS_SORULARI_HAYAT = [
     text: (a) => hitapEt(a, `${sigortaliUnvani(a, true)}nın adını ve soyadını paylaşır mısınız?`, "Adınızı ve soyadınızı paylaşır mısınız?"),
     type: "text",
     validate: adSoyadGecerliMi,
-    validationError: "Lütfen adı ve soyadı birlikte yazar mısınız? (Örn: Ahmet Yılmaz)"
+    validationError: "Lütfen adı ve soyadı birlikte yazar mısınız? (Örn: Ahmet Yılmaz)",
+    // Musteri kendi kendine basvurduysa bu soru zaten konusmanin en basinda
+    // (ASK_NAME) bir kere soruldu - satisAkisiBaslat, gecerli (en az 2
+    // kelimelik) bir ad-soyad varsa answers.musteri_ad_soyad'i ONCEDEN
+    // dolduruyor; burada da o durumda soruyu ATLIYORUZ ki musteriye ayni
+    // soru iki kez sorulmasin (bkz. 20.07.2026 geri bildirimi - "bunlar
+    // salak mi" izlenimi). Danisman akisinda (_musteriKendiKendine=false)
+    // bu hicbir zaman true olmaz, soru eskisi gibi her zaman sorulur.
+    skipIf: (a) => a._musteriKendiKendine && !!a.musteri_ad_soyad
   },
   // "Müşteri kelimesini lugatımızdan kaldırıyoruz" karari geregi, TCK sormadan
   // once artik T.C. vatandaşlığını soruyoruz - "Evet" ise uyruk otomatik
@@ -430,8 +439,10 @@ const SATIS_SORULARI_HAYAT = [
   },
   {
     id: "prim_tutari",
-    // BES'te "hesaplayici" diye bir arac yok (o sadece Hayat'ta vefat teminati
-    // hesaplamak icin kullaniliyor) - BES'te dogru terim "katki payi tutari".
+    // BES'te dogru terim "katki payi tutari" (Hayat'ta "prim"). Hayat'ta bu
+    // tutar artik harici bir hesaplayiciya gerek kalmadan girilebiliyor -
+    // vefat teminati, girilen bu prim tutarindan bot tarafindan otomatik
+    // hesaplaniyor (bkz. asagidaki vefat_teminati sorusu / vefatTeminatiHesapla.js).
     text: (a) => {
       const donem = a.odeme_donemi || "";
       if (a._urunTipi === "bes_yeni_is") {
@@ -443,8 +454,8 @@ const SATIS_SORULARI_HAYAT = [
       }
       return hitapEt(
         a,
-        `Hesaplayıcıdan bulduğunuz ${donem} prim tutarını paylaşır mısınız? (Örn: USD 450,00)`,
-        `Web sitemizdeki hesaplayıcıdan bulduğunuz ${donem} prim tutarını paylaşır mısınız? (Örn: USD 450,00)`
+        `${donem} prim tutarını paylaşır mısınız? (Örn: USD 450,00)`,
+        `Ödemek istediğiniz ${donem} prim tutarını paylaşır mısınız? (Örn: USD 450,00)`
       );
     },
     type: "text",
@@ -455,11 +466,20 @@ const SATIS_SORULARI_HAYAT = [
     validationError: primMinimumHatasi
   },
   // Sadece Hayat'ta soruluyor (BES listesine dahil edilmiyor, asagida
-  // SATIS_SORULARI_BES_YENI_IS filtrelemesine bakin) - vefat teminatini
-  // artik ekip degil, danisman kendisi (web sitemizden) hesaplayip giriyor.
+  // SATIS_SORULARI_BES_YENI_IS filtrelemesine bakin). Vefat teminati artik
+  // paket/yas/cinsiyet/odeme donemine gore BOTUN KENDISI otomatik hesapliyor
+  // (bkz. vefatTeminatiHesapla.js, satisSoruSor icindeki vefat_teminati
+  // ozel-durum kontrolu) - bu soru asagidaki metniyle SADECE otomatik
+  // hesaplama basarisiz olursa (orn. yas tablo araliginin disindaysa)
+  // guvenli bir fallback olarak gosteriliyor.
   {
     id: "vefat_teminati",
-    text: "Prim tutarına göre web sitemizden hesapladığınız vefat teminatını paylaşır mısınız?",
+    text: (a) =>
+      hitapEt(
+        a,
+        `${sigortaliUnvani(a, true)}nın vefat teminatını paylaşır mısınız? (Bu yaş/ödeme dönemi için otomatik hesaplayamadık, tutarı elle paylaşmanız gerekiyor.)`,
+        "Vefat teminatınızı paylaşır mısınız? (Bu yaş/ödeme dönemi için otomatik hesaplayamadık, tutarı elle paylaşmanız gerekiyor.)"
+      ),
     type: "text",
     validate: primTutariGecerliMi,
     validationError: "Bu bir tutar gibi görünmüyor, lütfen vefat teminatını rakamla birlikte tekrar yazar mısınız?"
@@ -888,6 +908,18 @@ function satisAkisiBaslat(from, session, urunTipi, sorular, musteriKendiKendineM
   // "paylaşır mısınız?") donusuyor, tamamlanma mesaji ve bildirim akisi da
   // farklilasiyor (bkz. satisTamamla).
   session.satisAnswers = { _urunTipi: urunTipi, _musteriKendiKendine: !!musteriKendiKendineMi };
+  // Musteri kendi kendine basvuruyorsa, adini/soyadini konusmanin en basinda
+  // (ASK_NAME asamasinda) zaten sormustuk - session.name GECERLI bir ad-soyad
+  // formatindaysa (musteri_ad_soyad sorusuyla AYNI kural: en az 2 kelime,
+  // bkz. adSoyadGecerliMi) burada onceden dolduruyoruz; asagidaki
+  // sonrakiGecerliIndex cagrisi bu durumda musteri_ad_soyad sorusunu
+  // (skipIf sayesinde) otomatik atlar. Musteri ASK_NAME'e tek kelimelik bir
+  // isim yazmissa (orn. sadece "Ahmet") pre-fill YAPILMIYOR - o zaman soru
+  // normal sekilde tekrar sorulur, boylece gecerlilik kontrolu atlanmis
+  // olmuyor.
+  if (musteriKendiKendineMi && session.name && adSoyadGecerliMi(session.name)) {
+    session.satisAnswers.musteri_ad_soyad = session.name;
+  }
   session.satisBelgeler = [];
   session.satisSoruIndex = sonrakiGecerliIndex(sorular, session.satisAnswers, 0);
   session.state = musteriKendiKendineMi ? "MUSTERI_SATIS_SORU" : "DANISMAN_SATIS_SORU";
@@ -917,6 +949,53 @@ async function musteriSatisIptalEt(from, session) {
 
 async function satisSoruSor(from, session) {
   const soru = session.satisSorular[session.satisSoruIndex];
+
+  // vefat_teminati sorusuna gelindiginde, once musteriye/danismana SORMADAN
+  // otomatik hesaplamayi deniyoruz (bkz. vefatTeminatiHesapla.js). Bu noktada
+  // paket/sigortali_dogum_tarihi/sigortali_cinsiyet/odeme_donemi/prim_tutari
+  // sorularinin hepsi zaten cevaplanmis oluyor (SATIS_SORULARI_HAYAT'taki
+  // sira geregi). Hesaplama basarili olursa: sonucu dogrudan
+  // session.satisAnswers.vefat_teminati'ye yaziyoruz, bilgilendirme mesaji
+  // gonderiyoruz ve bu soruyu HIC gostermeden bir sonraki gecerli soruya
+  // geciyoruz. Basarisiz olursa (orn. yas 0-85 tablo araliginin disinda)
+  // asagidaki normal soru-gosterme akisina SESSIZCE dusuyoruz - musteri/
+  // danisman eskisi gibi tutari elle girer, satis akisi hic etkilenmez.
+  // "!session.satisAnswers.vefat_teminati" kontrolu, bu soruya "geri al" ile
+  // donulup deger silindiginde tekrar hesaplanmasini, ama zaten (herhangi bir
+  // sebeple) bir deger varsa tekrar hesaplanip ustune yazilmamasini saglar.
+  if (soru.id === "vefat_teminati" && !session.satisAnswers.vefat_teminati) {
+    const primSayi = tutarSayiyaCevir(session.satisAnswers.prim_tutari);
+    const sonuc = vefatTeminatiHesapla({
+      paket: session.satisAnswers.paket,
+      cinsiyet: session.satisAnswers.sigortali_cinsiyet,
+      odemeDonemi: session.satisAnswers.odeme_donemi,
+      dogumTarihi: session.satisAnswers.sigortali_dogum_tarihi,
+      primSayi
+    });
+    if (sonuc.basarili) {
+      session.satisAnswers.vefat_teminati = sonuc.teminatMetin;
+      await sendText(
+        from,
+        hitapEt(
+          session.satisAnswers,
+          `${sigortaliUnvani(session.satisAnswers, true)}nın ödeyeceği prime göre vefat teminatını otomatik hesapladık: *${sonuc.teminatMetin}* ✅`,
+          `Ödeyeceğiniz prime göre vefat teminatınızı otomatik hesapladık: *${sonuc.teminatMetin}* ✅`
+        )
+      );
+      session.satisSoruIndex = sonrakiGecerliIndex(
+        session.satisSorular,
+        session.satisAnswers,
+        session.satisSoruIndex + 1
+      );
+      if (session.satisSoruIndex >= session.satisSorular.length) {
+        await satisTamamla(from, session);
+      } else {
+        await satisSoruSor(from, session);
+      }
+      return;
+    }
+    console.warn(`Vefat teminati otomatik hesaplanamadi (${sonuc.sebep}), soru elle sorulacak.`);
+  }
 
   // Belgeler adimina ilk gelindiginde, danismanin sigortaliya/katilimciya
   // yazdirip imzalatmasi icin Garanti'nin bos sablon formlarini once
@@ -1026,8 +1105,10 @@ function satisOzetVerileriniHesapla(a, urunTipi) {
     `Ödeme Aracı: ${a.odeme_araci}`,
     `Aylık Prim Tutarı: ${a.prim_tutari}`,
     `Ödeme Dönemi: ${a.odeme_donemi}`,
-    // Vefat teminatini artik danisman kendisi (web sitemizden) hesaplayip
-    // giriyor - sadece Hayat'ta soruluyor, BES'te bu alan yok.
+    // Vefat teminatini artik bot paket/yas/cinsiyet/odeme donemine gore
+    // otomatik hesaplayip giriyor (bkz. vefatTeminatiHesapla.js) - manuel
+    // giris sadece otomatik hesaplama basarisiz olursa devreye giriyor.
+    // Sadece Hayat'ta soruluyor, BES'te bu alan yok.
     ...(urunTipi === "hayat" ? [`Vefat Teminatı: ${a.vefat_teminati}`] : []),
     `Sigortalı Cep Telefonu: ${a.sigortali_cep}`,
     `Sigortalı E-Posta: ${a.sigortali_eposta}`,
@@ -1202,7 +1283,7 @@ async function satisTamamla(from, session) {
   if (musteriKendiKendine) {
     const bildirilecekNumaralar = conversationEngine.guvenlikAgiNumaralari(ilgiliFlow, musteriDanismanNumarasi);
     const detayliMetin =
-      `📋 Yeni bir satış talebi (müşteri kendi başvurdu)\n\n${olusturanEtiketi}${a.satis_danisman_adi ? ` (${a.satis_danisman_adi})` : ""}\n\n` +
+      `📋 Yeni iş talebi geldi\n📌 ${olusturanEtiketi}${a.satis_danisman_adi ? ` (${a.satis_danisman_adi})` : ""}\n\n` +
       ozetSatirlari.join("\n");
     for (const numara of bildirilecekNumaralar) {
       await conversationEngine.bildirimGonder(numara, urunAdiTam, a.musteri_ad_soyad, a.sigortali_cep, detayliMetin, kompaktDetay);
@@ -1302,7 +1383,7 @@ async function danismanYeniTalepiTamamla(from, session) {
   });
 
   const agentMessage =
-    `\u{1F4CB} Yeni sigorta teklif talebi\n` +
+    `\u{1F4CB} Yeni iş talebi geldi\n` +
     `📌 Bu talep ${olusturanEtiketi} tarafından oluşturuldu.\n\n` +
     `Sigortalı: ${musteriAdi}\n` +
     `Telefon: ${sigortaliTelefon}\n` +
