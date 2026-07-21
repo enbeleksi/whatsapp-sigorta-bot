@@ -38,6 +38,9 @@ const conversationEngine = require("./conversationEngine");
 const { belgeleriTekPdfeBirlestir } = require("./pdfBirlestir");
 const { belgeFotografiAnalizEt } = require("./belgeAnaliz");
 const { vefatTeminatiHesapla } = require("./vefatTeminatiHesapla");
+const { satisSozlesmesiAnalizEt } = require("./satisSozlesmesiAnaliz");
+const { BES_FONLARI, RISK_KATEGORILERI, fonlariKategoriyeGoreGrupla } = require("./besFonVerileri");
+const { ekonomiRaporuVeFonSepetiUret } = require("./ekonomiRaporuAnaliz");
 
 // Elinde "Trafik Sigortası" ya da "Kasko Sigortası" gecen urun etiketleri
 // icin, yenileme eklerken ayrica plaka soruyoruz (diger urunlerde anlamsiz).
@@ -1550,6 +1553,67 @@ async function destekTalebiGonder(from, session, destekMetni) {
   await devamMenuGoster(from, session);
 }
 
+// Taninan bir arac satis sozlesmesinden (bkz. satisSozlesmesiAnaliz.js)
+// cikarilan bilgilerle yeni bir "Satıştan İptal Talebi" kaydi acar
+// (leadStore'da, Bahadır'in kendi numarasina atanmis olarak - boylece
+// Bahadır bunu kendi "Taleplerimi Gör" listesinde gorur) VE Bahadır + Enbel'e
+// (guvenlik agi, destekTalebiGonder ile ayni mekanizma) WhatsApp bildirimi
+// gonderir. Musterinin (saticinin) bir WhatsApp numarasi belgeden
+// cikarilamadigi icin telefon alani bilerek null birakiliyor - bu, gercek bir
+// musteri konusma kaydi degil, sadece bir ic takip/bildirim kaydidir.
+async function satistanIptalTalebiOlustur(from, analiz) {
+  const danisman = danismaniBul(from);
+  const bildirenDanismanAdi = danisman ? danisman.name : "Bir danışman";
+
+  const ozetSatirlari = [
+    `Eski Plaka: ${analiz.eskiPlaka || "okunamadı"}`,
+    `Yeni Plaka: ${analiz.yeniPlaka || "okunamadı"}`,
+    `Motor No: ${analiz.motorNo || "okunamadı"}`,
+    `Şasi No: ${analiz.sasiNo || "okunamadı"}`,
+    `Satıcı (mevcut sigortalı): ${analiz.saticiAdi || "okunamadı"} - TC: ${analiz.saticiTck || "okunamadı"}`,
+    `Alıcı: ${analiz.aliciAdi || "okunamadı"} - TC: ${analiz.aliciTck || "okunamadı"}`,
+    ...(analiz.satisTarihi ? [`Satış Tarihi: ${analiz.satisTarihi}`] : [])
+  ];
+
+  const lead = leadStore.yeniLeadOlustur({
+    telefon: null,
+    musteriAdi: analiz.saticiAdi || "Bilinmeyen (satış sözleşmesi)",
+    urun: "Araç Satışı - Poliçe İptal Talebi",
+    danismanAdi: "Bahadır",
+    danismanNumarasi: BAHADIR_NUMARASI,
+    ozet: ozetSatirlari.join(" • ")
+  });
+  leadStore.notEkle(
+    lead.id,
+    `📄 ${bildirenDanismanAdi} tarafından gönderilen araç satış sözleşmesi fotoğrafından otomatik oluşturuldu.`
+  );
+
+  const detay =
+    `🚗 Satıştan İptal Talebi\n` +
+    `📌 ${bildirenDanismanAdi} tarafından gönderilen araç satış sözleşmesinden otomatik oluşturuldu.\n\n` +
+    ozetSatirlari.join("\n");
+
+  // Urun/danisman fark etmeksizin HER ZAMAN Bahadır + Enbel'e gitmesi icin,
+  // guvenlikAgiNumaralari'na "agentNumber: BAHADIR_NUMARASI" tasiyan sahte
+  // bir flow nesnesi veriyoruz (destekTalebiGonder'daki "flow || {}" ile ayni
+  // mantik, sadece burada gercek bir urun akisi olmadigi icin dogrudan
+  // Bahadır'i hedefliyoruz).
+  const bildirilecekNumaralar = conversationEngine.guvenlikAgiNumaralari(
+    { agentNumber: BAHADIR_NUMARASI },
+    BAHADIR_NUMARASI
+  );
+  for (const numara of bildirilecekNumaralar) {
+    await conversationEngine.bildirimGonder(numara, lead.urun, lead.musteriAdi, "-", detay, detay);
+  }
+
+  await sendText(
+    from,
+    `Araç satış sözleşmesini tanıdım ✅ Aşağıdaki bilgilerle bir "Satıştan İptal Talebi" oluşturdum ve Bahadır'a ilettim:\n\n${ozetSatirlari.join(
+      "\n"
+    )}`
+  );
+}
+
 // --- Yenileme Ekle: satis/talep akisindan bagimsiz, manuel police yenileme kaydi ---
 async function yenilemeBaslat(from, session) {
   session.state = "DANISMAN_YENILEME_MUSTERI_BEKLE";
@@ -1613,13 +1677,43 @@ async function yenilemelerimGoster(from, session) {
   await devamMenuGoster(from, session);
 }
 
-// --- BES Fonları Hakkında Bilgi: icerik henuz hazir degil, yer tutucu ---
-async function besFonBilgisiGoster(from, session) {
-  await sendText(
+// --- BES Fonları: alt menu (Fon Listesi / Guncel Ekonomi Raporu + Fon Sepeti) ---
+// Fon KIMLIK bilgileri (kod/ad/risk/ana varlik yapisi) besFonVerileri.js'te
+// SABIT olarak tutulur (bkz. o dosyanin basindaki aciklama - GETIRI
+// YUZDELERI BILEREK burada YOK, cok cabuk eskir). "Ekonomi Raporu ve Fon
+// Sepeti" secildiginde ise ekonomiRaporuAnaliz.js, Claude'un CANLI web
+// aramasi ozelligini kullanarak istek ANINDAKI guncel ekonomik durumu
+// arastirip dinamik bir sepet onerisi uretir.
+const BES_FON_MENU_SECENEKLERI = ["Fon Listesini Gör", "Ekonomi Raporu ve Fon Sepeti"];
+
+async function besFonMenuGoster(from, session) {
+  session.state = "BES_FON_MENU";
+  await sendButtons(
     from,
-    "🛠️ Bu özellik hazırlanıyor. Garanti Emeklilik'teki güncel Bireysel Emeklilik fonlarının bilgileri (getiri, risk seviyesi vb.) eklendiğinde buradan görebileceksiniz."
+    "Bireysel Emeklilik (BES) fonları hakkında ne yapmak istersiniz?",
+    BES_FON_MENU_SECENEKLERI
   );
-  await devamMenuGoster(from, session);
+}
+
+async function besFonKategoriSec(from, session) {
+  session.state = "BES_FON_KATEGORI_SEC";
+  const gruplar = fonlariKategoriyeGoreGrupla().filter((g) => g.fonlar.length > 0);
+  await sendList(
+    from,
+    "Hangi risk kategorisindeki fonları görmek istersiniz?",
+    "Kategori Seç",
+    gruplar.map((g) => g.etiket)
+  );
+}
+
+async function besRiskProfiliSec(from, session) {
+  session.state = "BES_FON_RISK_SECIMI";
+  await sendList(
+    from,
+    "Müşteri için hangi risk profiline uygun bir fon sepeti önerisi hazırlayayım?",
+    "Risk Profili Seç",
+    RISK_KATEGORILERI.map((k) => k.etiket)
+  );
 }
 
 async function handleAdvisorMessage(from, parsed) {
@@ -1737,6 +1831,43 @@ async function handleAdvisorMessage(from, parsed) {
       await satisSoruSor(from, session);
       return;
     }
+
+    // Buraya kadar gelindiyse (aktif bir soru/belge akisi yok - danisman
+    // menu/bos seviyede) VE gonderilen bir fotografsa, otomatik olarak bir
+    // "Araç Satış Sözleşmesi" (noter onaylı) olup olmadigini kontrol ediyoruz.
+    // Boylece danisman ozel bir menu secmeden, sadece belgeyi gonderdigi an
+    // bot taniyip TC/plaka/motor no/sasi no bilgilerini cikariyor ve
+    // Bahadır'a "Satıştan İptal Talebi" olarak yonlendiriyor (bkz.
+    // satisSozlesmesiAnaliz.js, satistanIptalTalebiOlustur). Sadece fotograf
+    // icin calisir (PDF/Word/Excel Vision API'ye gonderilemez). Belge bu tur
+    // degilse (aracSatisSozlesmesiMi=false) ya da analiz herhangi bir sebeple
+    // basarisiz olursa (orn. ANTHROPIC_API_KEY tanimli degil), SESSIZCE
+    // asagidaki eski/genel red mesajina duselim - bu yeni ozellik mevcut
+    // davranisi asla bozmamali.
+    if (parsed.mimeType && parsed.mimeType.startsWith("image/")) {
+      try {
+        const { buffer, mimeType } = await mediaIndir(parsed.mediaId);
+        const gercekMimeType = parsed.mimeType || mimeType;
+        const analiz = await satisSozlesmesiAnalizEt(buffer, gercekMimeType);
+        if (analiz.aracSatisSozlesmesiMi) {
+          if (!analiz.netMi) {
+            await sendText(
+              from,
+              `Bu bir araç satış sözleşmesi gibi görünüyor ama fotoğraf yeterince net değil 😕 ${analiz.aciklama || ""}\n\nDaha net bir fotoğraf gönderir misiniz?`
+            );
+            return;
+          }
+          await satistanIptalTalebiOlustur(from, analiz);
+          await devamMenuGoster(from, session);
+          return;
+        }
+        // aracSatisSozlesmesiMi false: bu tanimadigimiz baska bir belge -
+        // asagidaki genel red mesajina (mevcut davranis) dusuyoruz.
+      } catch (err) {
+        console.error("Satis sozlesmesi foto analizi yapilamadi (genel red mesajina dusuluyor):", err.message);
+      }
+    }
+
     await sendText(
       from,
       "Bu belgeyi bir talebe eklemek için önce 'Taleplerimi Gör' ile ilgili talebi açmanız gerekiyor."
@@ -1808,7 +1939,7 @@ async function handleAdvisorMessage(from, parsed) {
         return;
       }
       if (userText === "BES Fonları") {
-        await besFonBilgisiGoster(from, session);
+        await besFonMenuGoster(from, session);
         return;
       }
       if (userText === "Doküman Merkezi") {
@@ -1828,6 +1959,66 @@ async function handleAdvisorMessage(from, parsed) {
         return;
       }
       await karsilamaGoster(from, session);
+      return;
+    }
+
+    // --- BES Fonları alt menusu ---
+    case "BES_FON_MENU": {
+      userText = matchOption(userText, BES_FON_MENU_SECENEKLERI) || userText;
+      if (userText === "Fon Listesini Gör") {
+        await besFonKategoriSec(from, session);
+        return;
+      }
+      if (userText === "Ekonomi Raporu ve Fon Sepeti") {
+        await besRiskProfiliSec(from, session);
+        return;
+      }
+      await besFonMenuGoster(from, session);
+      return;
+    }
+
+    // --- BES Fonları: risk kategorisine gore fon listesi (statik veri) ---
+    case "BES_FON_KATEGORI_SEC": {
+      const gruplar = fonlariKategoriyeGoreGrupla().filter((g) => g.fonlar.length > 0);
+      const etiketler = gruplar.map((g) => g.etiket);
+      userText = matchOption(userText, etiketler) || userText;
+      const secilenGrup = gruplar.find((g) => g.etiket === userText);
+      if (!secilenGrup) {
+        await sendText(from, "Bu kategoriyi tanıyamadım, listeden seçer misiniz? 🙏");
+        await besFonKategoriSec(from, session);
+        return;
+      }
+      const satirlar = secilenGrup.fonlar.map(
+        (f) =>
+          `*${f.kod}* - ${f.ad} (Risk ${f.riskDegeri}/7)\n${f.aciklama}\nAna Varlık Yapısı: ${f.anaVarlikYapisi}\nKarşılaştırma Ölçütü: ${f.karsilastirmaOlcutu}`
+      );
+      await sendText(from, `📋 ${secilenGrup.etiket}\n\n${satirlar.join("\n\n")}`);
+      await devamMenuGoster(from, session);
+      return;
+    }
+
+    // --- BES Fonları: guncel ekonomi raporu + risk profiline gore dinamik fon sepeti onerisi ---
+    case "BES_FON_RISK_SECIMI": {
+      const etiketler = RISK_KATEGORILERI.map((k) => k.etiket);
+      userText = matchOption(userText, etiketler) || userText;
+      const secilen = RISK_KATEGORILERI.find((k) => k.etiket === userText);
+      if (!secilen) {
+        await sendText(from, "Bu risk profilini tanıyamadım, listeden seçer misiniz? 🙏");
+        await besRiskProfiliSec(from, session);
+        return;
+      }
+      await sendText(from, "Güncel ekonomi verilerini araştırıp fon sepeti önerinizi hazırlıyorum, bu birkaç saniye sürebilir... 🔍📈");
+      try {
+        const rapor = await ekonomiRaporuVeFonSepetiUret(secilen.etiket, BES_FONLARI);
+        await sendText(from, rapor);
+      } catch (err) {
+        console.error("Ekonomi raporu/fon sepeti uretilemedi:", err.message);
+        await sendText(
+          from,
+          "Üzgünüm, şu anda güncel ekonomi raporunu hazırlayamadım 😕 (Bu özellik için ANTHROPIC_API_KEY tanımlı ve web araması destekli olmalı.) Lütfen birazdan tekrar deneyin."
+        );
+      }
+      await devamMenuGoster(from, session);
       return;
     }
 
