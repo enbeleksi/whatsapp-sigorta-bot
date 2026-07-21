@@ -726,7 +726,7 @@ const ANA_MENU_SECENEKLERI = [
   "Bekleyen İş",
   "Destek Talebi Oluştur",
   "Yaklaşan Yenilemeler",
-  "Yenileme Takibi Ekle",
+  "Yeni Yenileme Takibi",
   "BES Fonları",
   "Doküman Merkezi",
   "Performansım"
@@ -1684,7 +1684,7 @@ async function yenilemelerimGoster(from, session) {
 // Sepeti" secildiginde ise ekonomiRaporuAnaliz.js, Claude'un CANLI web
 // aramasi ozelligini kullanarak istek ANINDAKI guncel ekonomik durumu
 // arastirip dinamik bir sepet onerisi uretir.
-const BES_FON_MENU_SECENEKLERI = ["Fon Listesini Gör", "Ekonomi Raporu ve Fon Sepeti"];
+const BES_FON_MENU_SECENEKLERI = ["Fon Listesini Gör", "Ekonomiye Göre Fon"];
 
 async function besFonMenuGoster(from, session) {
   session.state = "BES_FON_MENU";
@@ -1934,7 +1934,7 @@ async function handleAdvisorMessage(from, parsed) {
         await yenilemelerimGoster(from, session);
         return;
       }
-      if (userText === "Yenileme Takibi Ekle") {
+      if (userText === "Yeni Yenileme Takibi") {
         await yenilemeBaslat(from, session);
         return;
       }
@@ -1969,7 +1969,7 @@ async function handleAdvisorMessage(from, parsed) {
         await besFonKategoriSec(from, session);
         return;
       }
-      if (userText === "Ekonomi Raporu ve Fon Sepeti") {
+      if (userText === "Ekonomiye Göre Fon") {
         await besRiskProfiliSec(from, session);
         return;
       }

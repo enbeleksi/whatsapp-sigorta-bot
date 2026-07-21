@@ -63,43 +63,65 @@ async function ekonomiRaporuVeFonSepetiUret(riskProfili, fonListesi) {
     `💼 *${riskProfili} Risk Profili İçin Fon Sepeti Önerisi*\n` +
     `[Her fon için: "• KOD (%yüzde) - gerekçe" formatında bir satır]`;
 
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json"
-    },
-    body: JSON.stringify({
-      model: "claude-sonnet-5",
-      max_tokens: 1500,
-      tools: [
-        {
-          type: "web_search_20250305",
-          name: "web_search",
-          max_uses: 5
-        }
-      ],
-      messages: [
-        {
-          role: "user",
-          content: prompt
-        }
-      ]
-    })
-  });
+  // ONEMLI: web_search bir "server-side tool" oldugu icin normalde Anthropic
+  // aramayi/aramalari kendi tarafinda yapip TEK bir API cevabinda hem arama
+  // sonuclarini hem de Claude'un nihai metnini dondurur. Ancak Claude,
+  // max_uses sinirina (asagida 5) yaklasirken ya da uzun bir arastirma
+  // gerektiginde cevabi "stop_reason: pause_turn" ile YARIM birakip
+  // devam etmemizi bekleyebilir - bu durumda o ana kadarki yaniti bir
+  // sonraki istege "assistant" mesaji olarak ekleyip devam etmesini
+  // istememiz gerekiyor (Anthropic'in resmi web search dokumantasyonunda
+  // belirtilen davranis). Bunu atlarsak (eski kod tam olarak bunu
+  // atliyordu) bazen BOS/eksik bir metinle karsilasip "yanit anlasilamadi"
+  // hatasi alinabiliyordu - asagidaki dongu bunu bir kac deneme (en fazla 3)
+  // ile otomatik tamamliyor.
+  const mesajlar = [{ role: "user", content: prompt }];
+  let sonVeri = null;
 
-  const data = await response.json();
-  if (data?.error) {
-    throw new Error("Ekonomi raporu API hatasi: " + JSON.stringify(data.error));
+  for (let deneme = 0; deneme < 3; deneme++) {
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-5",
+        max_tokens: 2048,
+        tools: [
+          {
+            type: "web_search_20250305",
+            name: "web_search",
+            max_uses: 5
+          }
+        ],
+        messages: mesajlar
+      })
+    });
+
+    const data = await response.json();
+    if (data?.error) {
+      // HTTP durum kodunu da hataya ekliyoruz (429 rate limit, 529 overloaded,
+      // 401 gecersiz anahtar, 400 gecersiz istek vb. ayirt edebilmek icin) -
+      // Railway loglarinda console.error ile bu satirin tamami goruntulenir.
+      throw new Error(`Ekonomi raporu API hatasi (HTTP ${response.status}): ` + JSON.stringify(data.error));
+    }
+
+    sonVeri = data;
+    if (data.stop_reason === "pause_turn") {
+      mesajlar.push({ role: "assistant", content: data.content });
+      continue;
+    }
+    break;
   }
 
-  const icerik = Array.isArray(data?.content) ? data.content : [];
+  const icerik = Array.isArray(sonVeri?.content) ? sonVeri.content : [];
   const metinParcalari = icerik.filter((blok) => blok.type === "text").map((blok) => blok.text);
   const metin = metinParcalari.join("\n").trim();
 
   if (!metin) {
-    throw new Error("Ekonomi raporu yanıtı boş döndü: " + JSON.stringify(data));
+    throw new Error("Ekonomi raporu yanıtı boş döndü: " + JSON.stringify(sonVeri));
   }
 
   return metin + YASAL_UYARI;
