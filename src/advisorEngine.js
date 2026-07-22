@@ -41,6 +41,7 @@ const { vefatTeminatiHesapla } = require("./vefatTeminatiHesapla");
 const { satisSozlesmesiAnalizEt } = require("./satisSozlesmesiAnaliz");
 const { BES_FONLARI, RISK_KATEGORILERI, fonlariKategoriyeGoreGrupla } = require("./besFonVerileri");
 const { ekonomiRaporuVeFonSepetiUret } = require("./ekonomiRaporuAnaliz");
+const { fonGetirileriniGetir } = require("./tefasGetiriAnaliz");
 
 // Elinde "Trafik Sigortası" ya da "Kasko Sigortası" gecen urun etiketleri
 // icin, yenileme eklerken ayrica plaka soruyoruz (diger urunlerde anlamsiz).
@@ -1695,15 +1696,84 @@ async function besFonMenuGoster(from, session) {
   );
 }
 
-async function besFonKategoriSec(from, session) {
-  session.state = "BES_FON_KATEGORI_SEC";
+// WhatsApp metin mesajlarinin gercek karakter siniri ~4096 - bir kategoride
+// (orn. "Yüksek Riskli" 11 fon) tum fon bloklari tek mesaja sigmayabilir.
+// Bu yuzden her kategori, bu sinirin altinda kalacak sekilde birden fazla
+// mesaja bolunebilir (guvenlik payi birakmak icin sinirdan daha dusuk bir
+// esik kullaniyoruz).
+const WHATSAPP_MESAJ_KARAKTER_ESIGI = 3500;
+
+function bloklariMesajGruplarinaBol(baslikUzunlugu, bloklar) {
+  const gruplar = [];
+  let mevcutGrup = [];
+  let mevcutUzunluk = baslikUzunlugu;
+  for (const blok of bloklar) {
+    const ekUzunluk = blok.length + 2; // aralarina "\n\n" ekleniyor
+    if (mevcutGrup.length > 0 && mevcutUzunluk + ekUzunluk > WHATSAPP_MESAJ_KARAKTER_ESIGI) {
+      gruplar.push(mevcutGrup);
+      mevcutGrup = [];
+      mevcutUzunluk = baslikUzunlugu;
+    }
+    mevcutGrup.push(blok);
+    mevcutUzunluk += ekUzunluk;
+  }
+  if (mevcutGrup.length > 0) gruplar.push(mevcutGrup);
+  return gruplar;
+}
+
+// "Fon Listesini Gör" secildiginde TUM fonlari (21'i de) risk kategorisine
+// gore gruplanmis sekilde, kisa bilgileriyle birlikte gosterir - artik ayrica
+// bir kategori sec(im)i istemez. Ayrica tefasGetiriAnaliz.js araciligiyla
+// once Garanti BBVA Emeklilik'in kendi resmi fon getirileri sayfasindan,
+// bulunamazsa www.tefas.gov.tr'den (ve ilgili kaynaklardan) GUNCEL getiri
+// yuzdelerini arastirmayi dener; bu "best-effort" bir ek oldugu icin BASARISIZ olsa
+// bile (API hatasi, anahtar tanimsiz, hicbir fon icin veri bulunamamasi
+// vb.) fon listesi YINE DE getirisiz olarak gosterilmeye devam eder - bir
+// veri kaynagi sorunu, temel fon bilgisi gosterimini ASLA engellemez.
+// WhatsApp mesaj uzunlugu sinirlarina takilmamak icin liste, TEK BIR dev
+// mesaj yerine HER RISK KATEGORISI icin (gerekirse kategori icinde de
+// birden fazla parcaya bolunerek) AYRI mesajlar olarak gonderilir.
+async function besFonListesiGoster(from, session) {
+  await sendText(from, "Fon listesini ve güncel getiri verilerini hazırlıyorum, bir saniye... 🔍");
+
+  let getiriHaritasi = {};
+  let getiriBulundu = false;
+  try {
+    getiriHaritasi = await fonGetirileriniGetir(BES_FONLARI.map((f) => f.kod));
+    getiriBulundu = Object.keys(getiriHaritasi).length > 0;
+  } catch (err) {
+    console.error("Fon getirileri alinamadi (liste yine de getirisiz gosterilecek):", err.message);
+  }
+
   const gruplar = fonlariKategoriyeGoreGrupla().filter((g) => g.fonlar.length > 0);
-  await sendList(
+  for (const grup of gruplar) {
+    const satirlar = grup.fonlar.map((f) => {
+      const getiri = getiriHaritasi[f.kod];
+      const getiriSatiri = getiri ? `Güncel Getiri: ${getiri}\n` : "";
+      return (
+        `*${f.kod}* - ${f.ad} (Risk ${f.riskDegeri}/7)\n` +
+        `${f.aciklama}\n` +
+        `Ana Varlık Yapısı: ${f.anaVarlikYapisi}\n` +
+        `${getiriSatiri}` +
+        `Karşılaştırma Ölçütü: ${f.karsilastirmaOlcutu}`
+      );
+    });
+    const baslikMetni = `📋 ${grup.etiket}`;
+    const parcalar = bloklariMesajGruplarinaBol(baslikMetni.length + 4, satirlar);
+    for (let i = 0; i < parcalar.length; i++) {
+      const sayfaEki = parcalar.length > 1 ? ` (${i + 1}/${parcalar.length})` : "";
+      await sendText(from, `${baslikMetni}${sayfaEki}\n\n${parcalar[i].join("\n\n")}`);
+    }
+  }
+
+  await sendText(
     from,
-    "Hangi risk kategorisindeki fonları görmek istersiniz?",
-    "Kategori Seç",
-    gruplar.map((g) => g.etiket)
+    getiriBulundu
+      ? "ℹ️ Getiri verileri isteğiniz anında web'den (Garanti BBVA Emeklilik ve TEFAS kaynakları) araştırılmıştır - yaklaşık değerlerdir. Kesin ve güncel rakamlar için garantibbvaemeklilik.com.tr/urunler/emeklilik-yatirim-fonlarimiz/bes-fon-getirileri ya da tefas.gov.tr/tr/fon-getirileri adresini kontrol ediniz."
+      : "ℹ️ Şu an güncel getiri verileri alınamadı. Kesin rakamlar için garantibbvaemeklilik.com.tr/urunler/emeklilik-yatirim-fonlarimiz/bes-fon-getirileri ya da tefas.gov.tr/tr/fon-getirileri adresini kontrol ediniz."
   );
+
+  await devamMenuGoster(from, session);
 }
 
 async function besRiskProfiliSec(from, session) {
@@ -1966,7 +2036,7 @@ async function handleAdvisorMessage(from, parsed) {
     case "BES_FON_MENU": {
       userText = matchOption(userText, BES_FON_MENU_SECENEKLERI) || userText;
       if (userText === "Fon Listesini Gör") {
-        await besFonKategoriSec(from, session);
+        await besFonListesiGoster(from, session);
         return;
       }
       if (userText === "Ekonomiye Göre Fon") {
@@ -1974,26 +2044,6 @@ async function handleAdvisorMessage(from, parsed) {
         return;
       }
       await besFonMenuGoster(from, session);
-      return;
-    }
-
-    // --- BES Fonları: risk kategorisine gore fon listesi (statik veri) ---
-    case "BES_FON_KATEGORI_SEC": {
-      const gruplar = fonlariKategoriyeGoreGrupla().filter((g) => g.fonlar.length > 0);
-      const etiketler = gruplar.map((g) => g.etiket);
-      userText = matchOption(userText, etiketler) || userText;
-      const secilenGrup = gruplar.find((g) => g.etiket === userText);
-      if (!secilenGrup) {
-        await sendText(from, "Bu kategoriyi tanıyamadım, listeden seçer misiniz? 🙏");
-        await besFonKategoriSec(from, session);
-        return;
-      }
-      const satirlar = secilenGrup.fonlar.map(
-        (f) =>
-          `*${f.kod}* - ${f.ad} (Risk ${f.riskDegeri}/7)\n${f.aciklama}\nAna Varlık Yapısı: ${f.anaVarlikYapisi}\nKarşılaştırma Ölçütü: ${f.karsilastirmaOlcutu}`
-      );
-      await sendText(from, `📋 ${secilenGrup.etiket}\n\n${satirlar.join("\n\n")}`);
-      await devamMenuGoster(from, session);
       return;
     }
 

@@ -1,7 +1,7 @@
-// Danismanin WhatsApp'tan "BES Fonları" > "Güncel Ekonomi Raporu ve Fon
-// Sepeti Önerisi" secenegini sectiginde calisir. besFonVerileri.js'teki
-// SABIT fon listesini (kod/ad/risk/ana varlik yapisi) baglam olarak verip,
-// Anthropic'in CANLI WEB ARAMASI ozelligini (server-side "web_search" tool)
+// Danismanin WhatsApp'tan "BES Fonları" > "Ekonomiye Göre Fon" secenegini
+// sectiginde calisir. besFonVerileri.js'teki SABIT fon listesini (kod/ad/
+// risk/ana varlik yapisi) baglam olarak verip, Anthropic'in CANLI WEB
+// ARAMASI ozelligini (server-side "web_search" tool - bkz. anthropicMesaj.js)
 // kullanarak o ANKI (istek zamanindaki) guncel ekonomik durumu
 // arastirmasini ve secilen risk profiline uygun, GUNCEL kosullara gore
 // dinamik bir fon sepeti onerisi hazirlamasini istiyoruz.
@@ -14,21 +14,82 @@
 // KIMLIKLERI (kod, ad, risk seviyesi, strateji) sabit veriden gelirken,
 // EKONOMIK YORUM VE ONERI her istek aninda YENIDEN uretilir.
 //
+// ONEMLI - 22.07.2026 tarihli "fon sepeti hic gelmiyor, sadece ekonomi
+// yorumu var" geri bildirimi ve DUZELTME:
+// Eskiden TEK bir API cagrisinda hem "web arastirmasi yap + ekonomi ozeti
+// yaz" HEM DE "fon sepeti oner" isteniyordu. Web aramasi + arastirma +
+// uzun bir ekonomi yorumu, cagrinin cikti butcesini (max_tokens) once
+// tuketebiliyor - bu durumda model Gorev 1'i (ekonomi ozeti) yazip Gorev
+// 2'ye (fon sepeti) hic gelemeden "max_tokens" sebebiyle kesiliyordu ve
+// pause_turn DEGIL, dogrudan yarim/eksik bir metin donuyordu.
+//
+// COZUM: iki gorevi birbirinden TAMAMEN BAGIMSIZ iki ayri API cagrisina
+// boldum:
+//   1) ekonomiOzetiUret(): SADECE web aramasi + kisa ekonomi ozeti ister
+//      (kucuk cikti butcesi yeterli, fon sepetiyle yarismiyor).
+//   2) fonSepetiUret(): web aramasi ARACI KULLANMAZ (deterministik, hizli,
+//      ucuz) - 1. adimdaki ekonomi ozetini baglam olarak alip SADECE fon
+//      sepeti onerisini uretir.
+// Boylece fon sepeti onerisi, ekonomi ozetinin ne kadar uzun/kisa
+// oldugundan BAGIMSIZ olarak HER ZAMAN ayri ve garantili uretilir. Nihai
+// mesaj metni de (basliklar dahil) burada, JS tarafinda birlestirilir -
+// modelin format talimatina uyup uymamasina birakilmaz.
+//
 // ANTHROPIC_API_KEY ortam degiskeni gerektirir (diger analiz dosyalariyla
 // - ruhsatAnaliz.js, belgeAnaliz.js, satisSozlesmesiAnaliz.js - AYNI
 // gereksinim). Tanimli degilse ya da API bir hata donerse hata firlatir;
 // cagiran taraf (advisorEngine.js) kullaniciya "şu an hazırlayamadım"
 // tarzi guvenli bir mesajla geri donmeli.
 //
-// Bu, kesinlikle bir YATIRIM TAVSIYESI degildir - hem promptta hem de
+// Bu, kesinlikle bir YATIRIM TAVSIYESI degildir - hem promptlarda hem de
 // asagidaki YASAL_UYARI sabitiyle (donen metnin SONUNA HER ZAMAN, modelin
 // ne yazdigina bakilmaksizin programatik olarak eklenir) bu acikca
 // belirtilir.
+
+const { mesajGonder } = require("./anthropicMesaj");
 
 const YASAL_UYARI =
   "\n\n⚠️ Bu içerik yapay zeka tarafından, istek anındaki güncel web verileri kullanılarak otomatik oluşturulmuştur. " +
   "Genel bilgilendirme amaçlıdır, yatırım danışmanlığı ya da kesin getiri taahhüdü niteliği taşımaz. " +
   "Kesin işlem kararından önce güncel fon fiyatlarını ve resmi verileri Garanti Emeklilik/KAP üzerinden teyit ediniz.";
+
+// ADIM 1: SADECE guncel ekonomi ozeti (web aramasi ile). Kucuk cikti
+// butcesi (maxTokens) bilerek dar tutuluyor ki fon sepeti adimiyla asla
+// "yer" icin yarismasin.
+async function ekonomiOzetiUret(apiKey, bugun) {
+  const prompt =
+    `Bugünün tarihi: ${bugun}. Web araması yaparak bugüne en yakın güncel verilerle Türkiye ekonomisindeki durumu ` +
+    `özetle: TCMB politika faizi/son faiz kararı, TÜFE (enflasyon) son durumu ve trendi, USD/TRY ve EUR/TRY ` +
+    `kurunun durumu, BIST 100 endeksinin son durumu/trendi, ve varsa piyasaları etkileyebilecek önemli küresel/` +
+    `jeopolitik gelişmeler.\n\n` +
+    `SADECE 4-6 cümlelik, WhatsApp'ta okunacak sade bir Türkçe özet metni yaz - madde imi/liste/başlık KULLANMA, ` +
+    `akıcı bir paragraf yaz, başında/sonunda başka açıklama ekleme.`;
+
+  return mesajGonder(apiKey, prompt, { aramaAktif: true, maxTokens: 1024 });
+}
+
+// ADIM 2: SADECE fon sepeti onerisi - web aramasi KULLANMAZ, adim 1'in
+// ekonomi ozetini baglam olarak alir. Bu adim aramadan bagimsiz oldugu
+// icin hizli ve deterministiktir, cikti butcesi sorunu yasama ihtimali
+// cok dusuktur.
+async function fonSepetiUret(apiKey, riskProfili, fonListesi, ekonomiOzeti) {
+  const fonListesiMetni = fonListesi
+    .map((f) => `- ${f.kod} (${f.ad}) | Risk: ${f.riskDegeri}/7 | ${f.anaVarlikYapisi}`)
+    .join("\n");
+
+  const prompt =
+    `Aşağıda Garanti Emeklilik'in BES fonlarının SABİT listesi var (kod, ad, risk seviyesi 1-7, ana varlık yapısı):\n\n` +
+    `${fonListesiMetni}\n\n` +
+    `Güncel ekonomik durum özeti (az önce ayrıca araştırıldı, doğru kabul et):\n"${ekonomiOzeti}"\n\n` +
+    `Danışmanın müşterisi için seçtiği risk profili: "${riskProfili}".\n\n` +
+    `SADECE yukarıdaki listede yer alan fon KODLARINI kullanarak (yeni/uydurma kod ÜRETME), bu risk profiline VE ` +
+    `yukarıdaki güncel ekonomik duruma uygun 2-4 fonluk bir sepet öner (yüzdeler toplamı %100 olmalı).\n\n` +
+    `YANIT FORMATI (düz metin, başında/sonunda başka açıklama olmadan, HER FON İÇİN AYRI BİR SATIR):\n` +
+    `• KOD (%yüzde) - güncel ekonomik duruma atıfta bulunan 1 cümlelik gerekçe\n\n` +
+    `Örnek bir satır: "• GEK (%50) - Politika faizinin sabit kalması tahvil/bono getirisini destekliyor."`;
+
+  return mesajGonder(apiKey, prompt, { aramaAktif: false, maxTokens: 800 });
+}
 
 async function ekonomiRaporuVeFonSepetiUret(riskProfili, fonListesi) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -38,93 +99,14 @@ async function ekonomiRaporuVeFonSepetiUret(riskProfili, fonListesi) {
 
   const bugun = new Date().toLocaleDateString("tr-TR", { timeZone: "Europe/Istanbul", year: "numeric", month: "long", day: "numeric" });
 
-  const fonListesiMetni = fonListesi
-    .map((f) => `- ${f.kod} (${f.ad}) | Risk: ${f.riskDegeri}/7 | ${f.anaVarlikYapisi}`)
-    .join("\n");
+  const ekonomiOzeti = await ekonomiOzetiUret(apiKey, bugun);
+  const fonSepeti = await fonSepetiUret(apiKey, riskProfili, fonListesi, ekonomiOzeti);
 
-  const prompt =
-    `Bugünün tarihi: ${bugun}. Sen bir Türk emeklilik/sigorta acentesindeki danışmanlara yönelik güncel ekonomi ` +
-    `özeti ve fon sepeti önerisi hazırlayan bir asistansın.\n\n` +
-    `GÖREV 1 - GÜNCEL EKONOMİ ÖZETİ: Web araması yaparak bugüne en yakın güncel verilerle Türkiye ekonomisindeki ` +
-    `durumu kısaca özetle: TCMB politika faizi/son faiz kararı, TÜFE (enflasyon) son durumu ve trendi, USD/TRY ve ` +
-    `EUR/TRY kurunun durumu, BIST 100 endeksinin son durumu/trendi, ve varsa piyasaları etkileyebilecek önemli ` +
-    `küresel/jeopolitik gelişmeler. 4-6 cümlelik, WhatsApp'ta okunacak sade bir Türkçe özet yaz (madde imi/liste ` +
-    `kullanma, akıcı paragraf yaz).\n\n` +
-    `GÖREV 2 - FON SEPETİ ÖNERİSİ: Aşağıda Garanti Emeklilik'in BES fonlarının SABİT listesi var (kod, ad, risk ` +
-    `seviyesi 1-7, ana varlık yapısı). Danışmanın müşterisi için seçtiği risk profili: "${riskProfili}".\n\n` +
-    `${fonListesiMetni}\n\n` +
-    `SADECE yukarıdaki listede yer alan fon KODLARINI kullanarak (yeni/uydurma kod ÜRETME), bu risk profiline VE ` +
-    `Görev 1'de araştırdığın güncel ekonomik duruma uygun 2-4 fonluk bir sepet öner (yüzdeler toplamı %100 olmalı). ` +
-    `Her fon için kısa (1 cümle) bir gerekçe yaz - gerekçe güncel ekonomik duruma (ör. faiz/enflasyon/döviz trendine) ` +
-    `atıfta bulunmalı.\n\n` +
-    `YANIT FORMATI (düz metin, WhatsApp'a gönderilecek, başında/sonunda başka açıklama olmadan):\n` +
-    `📊 *Güncel Ekonomi Özeti* (${bugun})\n` +
-    `[Görev 1'deki özet]\n\n` +
-    `💼 *${riskProfili} Risk Profili İçin Fon Sepeti Önerisi*\n` +
-    `[Her fon için: "• KOD (%yüzde) - gerekçe" formatında bir satır]`;
+  const nihaiMetin =
+    `📊 *Güncel Ekonomi Özeti* (${bugun})\n${ekonomiOzeti}\n\n` +
+    `💼 *${riskProfili} Risk Profili İçin Fon Sepeti Önerisi*\n${fonSepeti}`;
 
-  // ONEMLI: web_search bir "server-side tool" oldugu icin normalde Anthropic
-  // aramayi/aramalari kendi tarafinda yapip TEK bir API cevabinda hem arama
-  // sonuclarini hem de Claude'un nihai metnini dondurur. Ancak Claude,
-  // max_uses sinirina (asagida 5) yaklasirken ya da uzun bir arastirma
-  // gerektiginde cevabi "stop_reason: pause_turn" ile YARIM birakip
-  // devam etmemizi bekleyebilir - bu durumda o ana kadarki yaniti bir
-  // sonraki istege "assistant" mesaji olarak ekleyip devam etmesini
-  // istememiz gerekiyor (Anthropic'in resmi web search dokumantasyonunda
-  // belirtilen davranis). Bunu atlarsak (eski kod tam olarak bunu
-  // atliyordu) bazen BOS/eksik bir metinle karsilasip "yanit anlasilamadi"
-  // hatasi alinabiliyordu - asagidaki dongu bunu bir kac deneme (en fazla 3)
-  // ile otomatik tamamliyor.
-  const mesajlar = [{ role: "user", content: prompt }];
-  let sonVeri = null;
-
-  for (let deneme = 0; deneme < 3; deneme++) {
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json"
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-5",
-        max_tokens: 2048,
-        tools: [
-          {
-            type: "web_search_20250305",
-            name: "web_search",
-            max_uses: 5
-          }
-        ],
-        messages: mesajlar
-      })
-    });
-
-    const data = await response.json();
-    if (data?.error) {
-      // HTTP durum kodunu da hataya ekliyoruz (429 rate limit, 529 overloaded,
-      // 401 gecersiz anahtar, 400 gecersiz istek vb. ayirt edebilmek icin) -
-      // Railway loglarinda console.error ile bu satirin tamami goruntulenir.
-      throw new Error(`Ekonomi raporu API hatasi (HTTP ${response.status}): ` + JSON.stringify(data.error));
-    }
-
-    sonVeri = data;
-    if (data.stop_reason === "pause_turn") {
-      mesajlar.push({ role: "assistant", content: data.content });
-      continue;
-    }
-    break;
-  }
-
-  const icerik = Array.isArray(sonVeri?.content) ? sonVeri.content : [];
-  const metinParcalari = icerik.filter((blok) => blok.type === "text").map((blok) => blok.text);
-  const metin = metinParcalari.join("\n").trim();
-
-  if (!metin) {
-    throw new Error("Ekonomi raporu yanıtı boş döndü: " + JSON.stringify(sonVeri));
-  }
-
-  return metin + YASAL_UYARI;
+  return nihaiMetin + YASAL_UYARI;
 }
 
 module.exports = { ekonomiRaporuVeFonSepetiUret };

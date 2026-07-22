@@ -12,10 +12,14 @@
 //   degismedigi surece).
 // - GETIRI YUZDELERI (2021-2025 yillik getiri, YBB vb.) BURADA YOK ve
 //   BILEREK EKLENMEDI - bu sayilar her gun degisir, PDF'ten kopyalanan bir
-//   sayi bir kac hafta icinde yanlis/eski olur. Bunun yerine guncel getiri
-//   yorumu ve fon sepeti onerisi icin ekonomiRaporuAnaliz.js, Claude'un
-//   CANLI web aramasi ozelligini kullanarak istek anindaki gercek guncel
-//   verileri ceker (bkz. o dosyanin basindaki aciklama).
+//   sayi bir kac hafta icinde yanlis/eski olur. Bunun yerine:
+//     - "Fon Listesini Gör" secildiginde tefasGetiriAnaliz.js, Claude'un
+//       CANLI web aramasi ozelligini kullanarak www.tefas.gov.tr ve ilgili
+//       kaynaklardan istek anindaki guncel getiri yuzdelerini (best-effort)
+//       cekip fon listesine ekler,
+//     - "Ekonomiye Göre Fon" secildiginde ise ekonomiRaporuAnaliz.js ayni
+//       yontemle guncel ekonomik yorum + fon sepeti onerisi uretir.
+//   Ikisi de o dosyalarin basindaki aciklamalarda detaylandirilmistir.
 // - Risk degeri asagidaki gibi kategorilere ayrilir (fon fact sheet'lerindeki
 //   renkli lejanda gore): 1-2 Dusuk Riskli, 3-4 Orta Riskli, 5-6 Yuksek
 //   Riskli, 7 Cok Yuksek Riskli.
