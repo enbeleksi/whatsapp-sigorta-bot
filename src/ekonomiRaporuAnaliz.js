@@ -91,6 +91,22 @@ async function fonSepetiUret(apiKey, riskProfili, fonListesi, ekonomiOzeti) {
   return mesajGonder(apiKey, prompt, { aramaAktif: false, maxTokens: 800 });
 }
 
+// ONEMLI - 22.07.2026 tarihli "hala fon sepeti gelmiyor" geri bildirimi ve
+// IKINCI DUZELTME:
+// Iki adimi ayri API cagrilarina bolmek (yukaridaki not) tek basina yeterli
+// olmadi - cunku iki adimin metni yine de TEK bir WhatsApp mesajinda
+// birlestirilip gonderiliyordu. Ekonomi ozeti (4-6 cumle, arama sonuclarina
+// gore bazen uzun) + fon sepeti + yasal uyari bir araya gelince, WhatsApp'in
+// tek mesaj karakter sinirina (~4096) yaklasip mesajin gonderimde kesilmesi/
+// reddedilmesi mumkundu - bu da "sadece ekonomi ozeti goruluyor, fon sepeti
+// hic gelmiyor" olarak yansiyordu (fon sepeti mesajin İKİNCİ yarisinda
+// oldugu icin kesintiden ilk etkilenen kisimdi).
+//
+// COZUM: bu fonksiyon artik TEK bir birlesik metin degil, BIRBIRINDEN
+// BAGIMSIZ IKI AYRI MESAJ metni doner - cagiran taraf (advisorEngine.js)
+// bunlari IKI AYRI sendText cagrisiyla gonderir. Boylece ekonomi ozeti ne
+// kadar uzun olursa olsun, fon sepeti mesaji KENDI BASINA (kisa ve sabit
+// bir uzunlukta) her zaman ayakta kalir.
 async function ekonomiRaporuVeFonSepetiUret(riskProfili, fonListesi) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -102,11 +118,10 @@ async function ekonomiRaporuVeFonSepetiUret(riskProfili, fonListesi) {
   const ekonomiOzeti = await ekonomiOzetiUret(apiKey, bugun);
   const fonSepeti = await fonSepetiUret(apiKey, riskProfili, fonListesi, ekonomiOzeti);
 
-  const nihaiMetin =
-    `📊 *Güncel Ekonomi Özeti* (${bugun})\n${ekonomiOzeti}\n\n` +
-    `💼 *${riskProfili} Risk Profili İçin Fon Sepeti Önerisi*\n${fonSepeti}`;
-
-  return nihaiMetin + YASAL_UYARI;
+  return {
+    ekonomiMesaji: `📊 *Güncel Ekonomi Özeti* (${bugun})\n${ekonomiOzeti}`,
+    fonSepetiMesaji: `💼 *${riskProfili} Risk Profili İçin Fon Sepeti Önerisi*\n${fonSepeti}${YASAL_UYARI}`
+  };
 }
 
 module.exports = { ekonomiRaporuVeFonSepetiUret };

@@ -1562,7 +1562,21 @@ async function destekTalebiGonder(from, session, destekMetni) {
 // gonderir. Musterinin (saticinin) bir WhatsApp numarasi belgeden
 // cikarilamadigi icin telefon alani bilerek null birakiliyor - bu, gercek bir
 // musteri konusma kaydi degil, sadece bir ic takip/bildirim kaydidir.
-async function satistanIptalTalebiOlustur(from, analiz) {
+// ONEMLI - 22.07.2026 tarihli geri bildirim: bu ozellik eskiden SADECE
+// fotograftan cikarilan bilgileri (TC/plaka/motor no/sasi no) METIN olarak
+// Bahadır'a bildiriyordu - fotografin/belgenin KENDISI hic gitmiyordu.
+// Bahadır'in bu talebi Garanti Emeklilik'e iletebilmesi icin sozlesmenin
+// PDF halinin de eline ulasmasi gerekiyor. Bu yuzden fonksiyon artik
+// orijinalBuffer/orijinalMimeType parametrelerini de aliyor, fotografi
+// (zaten var olan belgeleriTekPdfeBirlestir - satis kaydi belgelerini
+// birlestirmek icin kullanilan AYNI fonksiyon, tek elemanli bir dizi ile
+// cagrilarak) bir PDF'e ceviriyor, bu PDF'i hem lead'e belge olarak
+// ekliyor (panelde gorunmesi icin) HEM DE Bahadır'a (+ Enbel'e) WhatsApp
+// dokuman olarak dogrudan gonderiyor. PDF'e cevirme/gonderme herhangi bir
+// sebeple basarisiz olursa (orn. bozuk resim verisi), talep/bildirim METIN
+// olarak YINE DE olusturulmaya devam eder - bu ek adim ana akisi ASLA
+// engellememeli, sadece "olursa iyi olur" bir tamamlama.
+async function satistanIptalTalebiOlustur(from, analiz, orijinalBuffer, orijinalMimeType) {
   const danisman = danismaniBul(from);
   const bildirenDanismanAdi = danisman ? danisman.name : "Bir danışman";
 
@@ -1589,6 +1603,49 @@ async function satistanIptalTalebiOlustur(from, analiz) {
     `📄 ${bildirenDanismanAdi} tarafından gönderilen araç satış sözleşmesi fotoğrafından otomatik oluşturuldu.`
   );
 
+  // Fotografi PDF'e cevir (satis kaydi akisinda zaten kullanilan/test
+  // edilmis olan ayni fonksiyon - tek elemanli dizi ile "birlestirme"
+  // aslinda sadece tek bir A4 sayfaya yerlestirme islemi yapar).
+  //
+  // ONEMLI - "PDF gitmezse olmaz" (22.07.2026): PDF'e cevirme SADECE JPEG/
+  // PNG icin calisir (pdf-lib'in kendi sinirlamasi) - WhatsApp'in gonderdigi
+  // fotograflarin ezici cogunlugu zaten JPEG oldugu icin bu neredeyse HER
+  // ZAMAN basarili olur. Yine de (cok nadir de olsa) beklenmeyen bir format
+  // ya da bozuk veri PDF donusumunu basarisiz kilarsa, Bahadır'a HICBIR
+  // GORSEL BELGE ULASMAMASI kabul edilemez - bu yuzden boyle bir durumda
+  // asagida ORIJINAL FOTOGRAF dogrudan (PDF'e cevrilmeden) WhatsApp
+  // dokumani olarak gonderilir. Yani belge HER ZAMAN bir sekilde
+  // (PDF olarak ya da, cok nadir durumda, orijinal fotograf olarak)
+  // Bahadır'a ulasir - sadece metin bildirimiyle yetinilmez.
+  let sozlesmePdfBuffer = null;
+  let belgeninTuru = null; // "pdf" | "orijinal_fotograf" | null
+  if (orijinalBuffer && orijinalMimeType) {
+    try {
+      sozlesmePdfBuffer = await belgeleriTekPdfeBirlestir([
+        { dosyaAdi: "arac_satis_sozlesmesi", mimeType: orijinalMimeType, veriBase64: orijinalBuffer.toString("base64") }
+      ]);
+      leadStore.belgeEkle(lead.id, {
+        dosyaAdi: "Arac_Satis_Sozlesmesi.pdf",
+        mimeType: "application/pdf",
+        veriBase64: sozlesmePdfBuffer.toString("base64")
+      });
+      belgeninTuru = "pdf";
+    } catch (err) {
+      console.error("Satis sozlesmesi fotografi PDF'e cevrilemedi (orijinal fotograf yedek olarak gonderilecek):", err.message);
+      sozlesmePdfBuffer = null;
+      try {
+        leadStore.belgeEkle(lead.id, {
+          dosyaAdi: "Arac_Satis_Sozlesmesi" + (orijinalMimeType.includes("png") ? ".png" : ".jpg"),
+          mimeType: orijinalMimeType,
+          veriBase64: orijinalBuffer.toString("base64")
+        });
+        belgeninTuru = "orijinal_fotograf";
+      } catch (err2) {
+        console.error("Orijinal fotograf da lead'e eklenemedi:", err2.message);
+      }
+    }
+  }
+
   const detay =
     `🚗 Satıştan İptal Talebi\n` +
     `📌 ${bildirenDanismanAdi} tarafından gönderilen araç satış sözleşmesinden otomatik oluşturuldu.\n\n` +
@@ -1605,13 +1662,48 @@ async function satistanIptalTalebiOlustur(from, analiz) {
   );
   for (const numara of bildirilecekNumaralar) {
     await conversationEngine.bildirimGonder(numara, lead.urun, lead.musteriAdi, "-", detay, detay);
+    if (belgeninTuru === "pdf") {
+      try {
+        await sendDocument(
+          numara,
+          sozlesmePdfBuffer,
+          "application/pdf",
+          "Arac_Satis_Sozlesmesi.pdf",
+          `${bildirenDanismanAdi} tarafından gönderilen araç satış sözleşmesi`
+        );
+      } catch (err) {
+        console.error(`Satis sozlesmesi PDF'i ${numara} numarasina gonderilemedi:`, err.message);
+      }
+    } else if (belgeninTuru === "orijinal_fotograf") {
+      // PDF'e cevrilemedi (cok nadir bir durum) - belge YINE DE Bahadır'a
+      // ulassin diye orijinal fotografi oldugu gibi (WhatsApp dokumani
+      // olarak) gonderiyoruz. Boylece "hicbir gorsel belge gitmedi" durumu
+      // ASLA yasanmaz.
+      try {
+        await sendDocument(
+          numara,
+          orijinalBuffer,
+          orijinalMimeType,
+          "Arac_Satis_Sozlesmesi" + (orijinalMimeType.includes("png") ? ".png" : ".jpg"),
+          `${bildirenDanismanAdi} tarafından gönderilen araç satış sözleşmesi (orijinal fotoğraf - PDF'e çevrilemedi)`
+        );
+      } catch (err) {
+        console.error(`Satis sozlesmesi orijinal fotografi ${numara} numarasina gonderilemedi:`, err.message);
+      }
+    }
   }
+
+  const belgeNotu =
+    belgeninTuru === "pdf"
+      ? " (sözleşmenin PDF'i de dahil)"
+      : belgeninTuru === "orijinal_fotograf"
+        ? " (sözleşmenin orijinal fotoğrafı da dahil - PDF'e çevrilemedi ama fotoğraf yine de iletildi)"
+        : "";
 
   await sendText(
     from,
-    `Araç satış sözleşmesini tanıdım ✅ Aşağıdaki bilgilerle bir "Satıştan İptal Talebi" oluşturdum ve Bahadır'a ilettim:\n\n${ozetSatirlari.join(
-      "\n"
-    )}`
+    `Araç satış sözleşmesini tanıdım ✅ Aşağıdaki bilgilerle bir "Satıştan İptal Talebi" oluşturdum ve Bahadır'a ilettim` +
+      `${belgeNotu}:\n\n${ozetSatirlari.join("\n")}`
   );
 }
 
@@ -1927,7 +2019,7 @@ async function handleAdvisorMessage(from, parsed) {
             );
             return;
           }
-          await satistanIptalTalebiOlustur(from, analiz);
+          await satistanIptalTalebiOlustur(from, analiz, buffer, gercekMimeType);
           await devamMenuGoster(from, session);
           return;
         }
@@ -2059,8 +2151,14 @@ async function handleAdvisorMessage(from, parsed) {
       }
       await sendText(from, "Güncel ekonomi verilerini araştırıp fon sepeti önerinizi hazırlıyorum, bu birkaç saniye sürebilir... 🔍📈");
       try {
-        const rapor = await ekonomiRaporuVeFonSepetiUret(secilen.etiket, BES_FONLARI);
-        await sendText(from, rapor);
+        // ONEMLI: ekonomi ozeti ve fon sepeti onerisi BILEREK IKI AYRI
+        // sendText cagrisiyla gonderiliyor (bkz. ekonomiRaporuAnaliz.js'teki
+        // "hala fon sepeti gelmiyor" aciklamasi) - boylece ekonomi ozeti ne
+        // kadar uzun olursa olsun, WhatsApp'in tek mesaj karakter sinirina
+        // takilip fon sepeti kismini goturmesi ihtimali ORTADAN KALKAR.
+        const { ekonomiMesaji, fonSepetiMesaji } = await ekonomiRaporuVeFonSepetiUret(secilen.etiket, BES_FONLARI);
+        await sendText(from, ekonomiMesaji);
+        await sendText(from, fonSepetiMesaji);
       } catch (err) {
         console.error("Ekonomi raporu/fon sepeti uretilemedi:", err.message);
         await sendText(
