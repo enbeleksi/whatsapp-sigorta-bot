@@ -1,9 +1,12 @@
 // Anthropic Messages API'sine (opsiyonel olarak CANLI WEB ARAMASI - server-
 // side "web_search" araci - acik) tek bir istek gonderen ORTAK yardimci
-// fonksiyon. ekonomiRaporuAnaliz.js VE tefasGetiriAnaliz.js tarafindan
-// paylasilir - ikisi de ayni "web arama + pause_turn devam ettirme + HTTP
-// hata kodu raporlama" mantigina ihtiyac duydugu icin burada TEK bir yerde
-// tutuluyor (kod tekrarini/driftini onlemek icin).
+// fonksiyon. tefasGetiriAnaliz.js tarafindan kullanilir - "web arama +
+// pause_turn devam ettirme + HTTP hata kodu raporlama" mantigi burada TEK
+// bir yerde tutuluyor (kod tekrarini/driftini onlemek icin).
+//
+// NOT (22.07.2026): bu dosyayi ayrica kullanan ekonomiRaporuAnaliz.js
+// ("Ekonomiye Göre Fon" ozelligi) kullanici talebiyle kaldirildi - web
+// aramasina bagli iki API cagrisi zaman zaman guvenilir calismiyordu.
 //
 // web_search bir "server-side tool" oldugu icin normalde Anthropic
 // aramayi/aramalari kendi tarafinda yapip TEK bir API cevabinda hem arama

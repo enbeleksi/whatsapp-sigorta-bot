@@ -39,8 +39,7 @@ const { belgeleriTekPdfeBirlestir } = require("./pdfBirlestir");
 const { belgeFotografiAnalizEt } = require("./belgeAnaliz");
 const { vefatTeminatiHesapla } = require("./vefatTeminatiHesapla");
 const { satisSozlesmesiAnalizEt } = require("./satisSozlesmesiAnaliz");
-const { BES_FONLARI, RISK_KATEGORILERI, fonlariKategoriyeGoreGrupla } = require("./besFonVerileri");
-const { ekonomiRaporuVeFonSepetiUret } = require("./ekonomiRaporuAnaliz");
+const { BES_FONLARI, fonlariKategoriyeGoreGrupla } = require("./besFonVerileri");
 const { fonGetirileriniGetir } = require("./tefasGetiriAnaliz");
 
 // Elinde "Trafik Sigortası" ya da "Kasko Sigortası" gecen urun etiketleri
@@ -1770,24 +1769,24 @@ async function yenilemelerimGoster(from, session) {
   await devamMenuGoster(from, session);
 }
 
-// --- BES Fonları: alt menu (Fon Listesi / Guncel Ekonomi Raporu + Fon Sepeti) ---
+// --- BES Fonları ---
 // Fon KIMLIK bilgileri (kod/ad/risk/ana varlik yapisi) besFonVerileri.js'te
 // SABIT olarak tutulur (bkz. o dosyanin basindaki aciklama - GETIRI
-// YUZDELERI BILEREK burada YOK, cok cabuk eskir). "Ekonomi Raporu ve Fon
-// Sepeti" secildiginde ise ekonomiRaporuAnaliz.js, Claude'un CANLI web
-// aramasi ozelligini kullanarak istek ANINDAKI guncel ekonomik durumu
-// arastirip dinamik bir sepet onerisi uretir.
-const BES_FON_MENU_SECENEKLERI = ["Fon Listesini Gör", "Ekonomiye Göre Fon"];
-
-async function besFonMenuGoster(from, session) {
-  session.state = "BES_FON_MENU";
-  await sendButtons(
-    from,
-    "Bireysel Emeklilik (BES) fonları hakkında ne yapmak istersiniz?",
-    BES_FON_MENU_SECENEKLERI
-  );
-}
-
+// YUZDELERI BILEREK burada YOK, cok cabuk eskir).
+//
+// NOT (22.07.2026): "Ekonomiye Göre Fon" (guncel ekonomi ozeti + risk
+// profiline gore dinamik fon sepeti onerisi - eskiden ekonomiRaporuAnaliz.js
+// araciligiyla Claude'un web aramasi ozelligini kullanarak calisiyordu)
+// KULLANICI TALEBIYLE TAMAMEN KALDIRILDI - guvenilir calismadigi icin
+// (web_search'e bagli iki API cagrisi zaman zaman basarisiz oluyordu).
+// ekonomiRaporuAnaliz.js dosyasi da bu yuzden silindi. "BES Fonları" artik
+// SADECE fon listesini (asagidaki besFonListesiGoster) gosterir - bu
+// fonksiyon hala tefasGetiriAnaliz.js araciligiyla web aramasiyla GUNCEL
+// GETIRI verisi cekmeye calisir, ama bu "best-effort" bir ek oldugu icin
+// basarisiz olsa bile fon listesi YINE DE (getirisiz) gosterilmeye devam
+// eder - o yuzden ayni guvenilirlik sorunu burada kullaniciyi
+// engellemiyor/hata mesajiyla karsilastirmiyor.
+//
 // WhatsApp metin mesajlarinin gercek karakter siniri ~4096 - bir kategoride
 // (orn. "Yüksek Riskli" 11 fon) tum fon bloklari tek mesaja sigmayabilir.
 // Bu yuzden her kategori, bu sinirin altinda kalacak sekilde birden fazla
@@ -1866,16 +1865,6 @@ async function besFonListesiGoster(from, session) {
   );
 
   await devamMenuGoster(from, session);
-}
-
-async function besRiskProfiliSec(from, session) {
-  session.state = "BES_FON_RISK_SECIMI";
-  await sendList(
-    from,
-    "Müşteri için hangi risk profiline uygun bir fon sepeti önerisi hazırlayayım?",
-    "Risk Profili Seç",
-    RISK_KATEGORILERI.map((k) => k.etiket)
-  );
 }
 
 async function handleAdvisorMessage(from, parsed) {
@@ -2101,7 +2090,7 @@ async function handleAdvisorMessage(from, parsed) {
         return;
       }
       if (userText === "BES Fonları") {
-        await besFonMenuGoster(from, session);
+        await besFonListesiGoster(from, session);
         return;
       }
       if (userText === "Doküman Merkezi") {
@@ -2121,52 +2110,6 @@ async function handleAdvisorMessage(from, parsed) {
         return;
       }
       await karsilamaGoster(from, session);
-      return;
-    }
-
-    // --- BES Fonları alt menusu ---
-    case "BES_FON_MENU": {
-      userText = matchOption(userText, BES_FON_MENU_SECENEKLERI) || userText;
-      if (userText === "Fon Listesini Gör") {
-        await besFonListesiGoster(from, session);
-        return;
-      }
-      if (userText === "Ekonomiye Göre Fon") {
-        await besRiskProfiliSec(from, session);
-        return;
-      }
-      await besFonMenuGoster(from, session);
-      return;
-    }
-
-    // --- BES Fonları: guncel ekonomi raporu + risk profiline gore dinamik fon sepeti onerisi ---
-    case "BES_FON_RISK_SECIMI": {
-      const etiketler = RISK_KATEGORILERI.map((k) => k.etiket);
-      userText = matchOption(userText, etiketler) || userText;
-      const secilen = RISK_KATEGORILERI.find((k) => k.etiket === userText);
-      if (!secilen) {
-        await sendText(from, "Bu risk profilini tanıyamadım, listeden seçer misiniz? 🙏");
-        await besRiskProfiliSec(from, session);
-        return;
-      }
-      await sendText(from, "Güncel ekonomi verilerini araştırıp fon sepeti önerinizi hazırlıyorum, bu birkaç saniye sürebilir... 🔍📈");
-      try {
-        // ONEMLI: ekonomi ozeti ve fon sepeti onerisi BILEREK IKI AYRI
-        // sendText cagrisiyla gonderiliyor (bkz. ekonomiRaporuAnaliz.js'teki
-        // "hala fon sepeti gelmiyor" aciklamasi) - boylece ekonomi ozeti ne
-        // kadar uzun olursa olsun, WhatsApp'in tek mesaj karakter sinirina
-        // takilip fon sepeti kismini goturmesi ihtimali ORTADAN KALKAR.
-        const { ekonomiMesaji, fonSepetiMesaji } = await ekonomiRaporuVeFonSepetiUret(secilen.etiket, BES_FONLARI);
-        await sendText(from, ekonomiMesaji);
-        await sendText(from, fonSepetiMesaji);
-      } catch (err) {
-        console.error("Ekonomi raporu/fon sepeti uretilemedi:", err.message);
-        await sendText(
-          from,
-          "Üzgünüm, şu anda güncel ekonomi raporunu hazırlayamadım 😕 (Bu özellik için ANTHROPIC_API_KEY tanımlı ve web araması destekli olmalı.) Lütfen birazdan tekrar deneyin."
-        );
-      }
-      await devamMenuGoster(from, session);
       return;
     }
 
