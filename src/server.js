@@ -1022,3 +1022,6 @@ async function baslat() {
 }
 
 baslat();
+
+// Web hesaplayici teklif bildirimleri
+require('./teklifEndpoint')(app);
