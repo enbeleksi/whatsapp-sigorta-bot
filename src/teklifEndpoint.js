@@ -40,15 +40,15 @@ module.exports = function (app) {
          b.danisman || null, b.kur || null, b.kaynak || 'web']
       );
 
-      var mesaj = '*Yeni Web Teklifi!*\n\n' +
-        'Ad: ' + b.ad + '\n' +
-        'Tel: ' + b.telefon + '\n' +
-        'Tip: ' + (b.kisiTipi || '-') + '\n' +
-        (b.gelirAylikTL ? 'Aylık Gelir: ' + Number(b.gelirAylikTL).toLocaleString('tr-TR') + ' TL\n' : '') +
-        'Prim: ' + (b.primUsd || '-') + ' USD / ' + (b.odemeDonemi || 'aylık') + ' (' + (b.paket || '-') + ' Paket)\n' +
-        (b.teminatUsd ? 'Teminat: ~' + Number(b.teminatUsd).toLocaleString('tr-TR') + ' USD' + (b.yas ? ' (' + b.yas + ' yaş, ' + (b.cinsiyet || '') + ')' : '') + '\n' : '') +
-        (b.danisman ? 'Danışman: ' + b.danisman + '\n' : '') +
-        '\nMüşteri PDF teklifini indirdi, sıcakken arayın!';
+      var mesaj = '🔔 *Yeni Web Teklifi!*\n\n' +
+        '👤 Ad: ' + b.ad + '\n' +
+        '📱 Tel: ' + b.telefon + '\n' +
+        '🏷️ Tip: ' + (b.kisiTipi || '-') + '\n' +
+        (b.gelirAylikTL ? '💰 Aylık Gelir: ' + Number(b.gelirAylikTL).toLocaleString('tr-TR') + ' TL\n' : '') +
+        '💵 Prim: ' + (b.primUsd || '-') + ' USD / ' + (b.odemeDonemi || 'aylık') + ' (' + (b.paket || '-') + ' Paket)\n' +
+        (b.teminatUsd ? '🛡️ Teminat: ~' + Number(b.teminatUsd).toLocaleString('tr-TR') + ' USD' + (b.yas ? ' (' + b.yas + ' yaş, ' + (b.cinsiyet || '') + ')' : '') + '\n' : '') +
+        (b.danisman ? '🤝 Danışman: ' + b.danisman + '\n' : '') +
+        '\nMüşteri PDF teklifini indirdi, sıcakken arayın! 🔥';
 
       var alicilar = [];
       if (process.env.NOTIFY_NUMBER) alicilar.push(process.env.NOTIFY_NUMBER.trim());
